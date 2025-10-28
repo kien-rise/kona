@@ -186,24 +186,33 @@ impl BootInfo {
     where
         O: PreimageOracleClient + Send,
     {
+        tracing::debug!("KONA: Starting BootInfo::load - loading boot information from preimage oracle");
+
+        tracing::debug!("KONA: Loading L1 head hash from oracle");
         let mut l1_head: B256 = B256::ZERO;
         oracle
             .get_exact(PreimageKey::new_local(L1_HEAD_KEY.to()), l1_head.as_mut())
             .await
             .map_err(OracleProviderError::Preimage)?;
+        tracing::debug!("KONA: Successfully loaded L1 head hash: {:?}", l1_head);
 
+        tracing::debug!("KONA: Loading agreed L2 output root from oracle");
         let mut l2_output_root: B256 = B256::ZERO;
         oracle
             .get_exact(PreimageKey::new_local(L2_OUTPUT_ROOT_KEY.to()), l2_output_root.as_mut())
             .await
             .map_err(OracleProviderError::Preimage)?;
+        tracing::debug!("KONA: Successfully loaded agreed L2 output root: {:?}", l2_output_root);
 
+        tracing::debug!("KONA: Loading claimed L2 output root from oracle");
         let mut l2_claim: B256 = B256::ZERO;
         oracle
             .get_exact(PreimageKey::new_local(L2_CLAIM_KEY.to()), l2_claim.as_mut())
             .await
             .map_err(OracleProviderError::Preimage)?;
+        tracing::debug!("KONA: Successfully loaded claimed L2 output root: {:?}", l2_claim);
 
+        tracing::debug!("KONA: Loading claimed L2 block number from oracle");
         let l2_claim_block = u64::from_be_bytes(
             oracle
                 .get(PreimageKey::new_local(L2_CLAIM_BLOCK_NUMBER_KEY.to()))
@@ -213,6 +222,9 @@ impl BootInfo {
                 .try_into()
                 .map_err(OracleProviderError::SliceConversion)?,
         );
+        tracing::debug!("KONA: Successfully loaded claimed L2 block number: {}", l2_claim_block);
+
+        tracing::debug!("KONA: Loading chain ID from oracle");
         let chain_id = u64::from_be_bytes(
             oracle
                 .get(PreimageKey::new_local(L2_CHAIN_ID_KEY.to()))
@@ -222,10 +234,13 @@ impl BootInfo {
                 .try_into()
                 .map_err(OracleProviderError::SliceConversion)?,
         );
+        tracing::debug!("KONA: Successfully loaded chain ID: {}", chain_id);
 
         // Attempt to load the rollup config from the chain ID. If there is no config for the chain,
         // fall back to loading the config from the preimage oracle.
+        tracing::debug!("KONA: Loading rollup config for chain ID: {}", chain_id);
         let rollup_config = if let Some(config) = ROLLUP_CONFIGS.get(&chain_id) {
+            tracing::debug!("KONA: Found rollup config in hardcoded registry for chain ID: {}", chain_id);
             config.clone()
         } else {
             warn!(
@@ -233,16 +248,21 @@ impl BootInfo {
                 "No rollup config found for chain ID {}, falling back to preimage oracle. This is insecure in production without additional validation!",
                 chain_id
             );
+            tracing::debug!("KONA: Loading rollup config from preimage oracle for chain ID: {}", chain_id);
             let ser_cfg = oracle
                 .get(PreimageKey::new_local(L2_ROLLUP_CONFIG_KEY.to()))
                 .await
                 .map_err(OracleProviderError::Preimage)?;
-            serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?
+            let config = serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?;
+            tracing::debug!("KONA: Successfully loaded rollup config from oracle for chain ID: {}", chain_id);
+            config
         };
 
         // Attempt to load the rollup config from the chain ID. If there is no config for the chain,
         // fall back to loading the config from the preimage oracle.
+        tracing::debug!("KONA: Loading L1 config for L1 chain ID: {}", rollup_config.l1_chain_id);
         let l1_config = if let Some(config) = L1_CONFIGS.get(&rollup_config.l1_chain_id) {
+            tracing::debug!("KONA: Found L1 config in hardcoded registry for L1 chain ID: {}", rollup_config.l1_chain_id);
             config.clone()
         } else {
             warn!(
@@ -250,12 +270,15 @@ impl BootInfo {
                 "No l1 config found for chain ID {}, falling back to preimage oracle. This is insecure in production without additional validation!",
                 rollup_config.l1_chain_id
             );
+            tracing::debug!("KONA: Loading L1 config from preimage oracle for L1 chain ID: {}", rollup_config.l1_chain_id);
             let ser_cfg = oracle
                 .get(PreimageKey::new_local(L1_CONFIG_KEY.to()))
                 .await
                 .map_err(OracleProviderError::Preimage)?;
 
-            serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?
+            let config = serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?;
+            tracing::debug!("KONA: Successfully loaded L1 config from oracle for L1 chain ID: {}", rollup_config.l1_chain_id);
+            config
         };
 
         debug!(
@@ -266,7 +289,8 @@ impl BootInfo {
             "Successfully loaded boot information"
         );
 
-        Ok(Self {
+        tracing::debug!("KONA: Creating BootInfo struct with loaded parameters");
+        let boot_info = Self {
             l1_head,
             agreed_l2_output_root: l2_output_root,
             claimed_l2_output_root: l2_claim,
@@ -274,6 +298,17 @@ impl BootInfo {
             chain_id,
             rollup_config,
             l1_config,
-        })
+        };
+
+        tracing::debug!(
+            "KONA: Successfully completed BootInfo::load - L1 head: {:?}, L2 chain: {}, claimed block: {}, agreed root: {:?}, claimed root: {:?}",
+            boot_info.l1_head,
+            boot_info.chain_id,
+            boot_info.claimed_l2_block_number,
+            boot_info.agreed_l2_output_root,
+            boot_info.claimed_l2_output_root
+        );
+
+        Ok(boot_info)
     }
 }
