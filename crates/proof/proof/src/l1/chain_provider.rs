@@ -43,7 +43,9 @@ impl<T: CommsClient + Sync + Send> ChainProvider for OracleL1ChainProvider<T> {
 
     async fn block_info_by_number(&mut self, block_number: u64) -> Result<BlockInfo, Self::Error> {
         // Fetch the starting block header.
+        tracing::debug!("KONA: Fetching L1 header by hash: {:?}", self.l1_head);
         let mut header = self.header_by_hash(self.l1_head).await?;
+        tracing::debug!("KONA: Successfully fetched L1 header: {:?}", self.l1_head);
 
         // Check if the block number is in range. If not, we can fail early.
         if block_number > header.number {
@@ -52,7 +54,9 @@ impl<T: CommsClient + Sync + Send> ChainProvider for OracleL1ChainProvider<T> {
 
         // Walk back the block headers to the desired block number.
         while header.number > block_number {
+            tracing::debug!("KONA: Fetching L1 parent header by hash: {:?}", header.parent_hash);
             header = self.header_by_hash(header.parent_hash).await?;
+            tracing::debug!("KONA: Successfully fetched L1 parent header: {:?}", header.parent_hash);
         }
 
         Ok(BlockInfo {
@@ -65,7 +69,9 @@ impl<T: CommsClient + Sync + Send> ChainProvider for OracleL1ChainProvider<T> {
 
     async fn receipts_by_hash(&mut self, hash: B256) -> Result<Vec<Receipt>, Self::Error> {
         // Fetch the block header to find the receipts root.
+        tracing::debug!("KONA: Fetching L1 header by hash for receipts: {:?}", hash);
         let header = self.header_by_hash(hash).await?;
+        tracing::debug!("KONA: Successfully fetched L1 header for receipts: {:?}", hash);
 
         // Send a hint for the block's receipts, and walk through the receipts trie in the header to
         // verify them.
@@ -91,7 +97,9 @@ impl<T: CommsClient + Sync + Send> ChainProvider for OracleL1ChainProvider<T> {
         hash: B256,
     ) -> Result<(BlockInfo, Vec<TxEnvelope>), Self::Error> {
         // Fetch the block header to construct the block info.
+        tracing::debug!("KONA: Fetching L1 header by hash for block info and transactions: {:?}", hash);
         let header = self.header_by_hash(hash).await?;
+        tracing::debug!("KONA: Successfully fetched L1 header for block info and transactions: {:?}", hash);
         let block_info = BlockInfo {
             hash,
             number: header.number,

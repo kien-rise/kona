@@ -130,8 +130,10 @@ where
                 .ok_or(MessageGraphError::EmptyDependencySet)?;
 
             // Look up the parent header for the block.
+            tracing::debug!("KONA: Fetching parent header for consolidation, chain {}: {:?}", chain_id, header.parent_hash);
             let parent_header =
                 self.interop_provider.header_by_hash(*chain_id, header.parent_hash).await?;
+            tracing::debug!("KONA: Successfully fetched parent header for consolidation, chain {}: {:?}", chain_id, header.parent_hash);
 
             // Traverse the transactions trie of the block to re-execute.
             let trie_walker = OrderedListWalker::try_new_hydrated(

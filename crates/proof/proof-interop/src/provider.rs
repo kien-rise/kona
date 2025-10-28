@@ -152,10 +152,14 @@ where
                     }
                 };
 
+                tracing::debug!("KONA: Fetching interop header by hash (EIP-2935) for chain {}: {:?}", chain_id, block_hash);
                 header = self.header_by_hash(chain_id, block_hash).await?;
+                tracing::debug!("KONA: Successfully fetched interop header (EIP-2935) for chain {}: {:?}", chain_id, block_hash);
             } else {
                 // Walk back the block headers one-by-one until the desired block number is reached.
+                tracing::debug!("KONA: Fetching interop parent header by hash for chain {}: {:?}", chain_id, header.parent_hash);
                 header = self.header_by_hash(chain_id, header.parent_hash).await?;
+                tracing::debug!("KONA: Successfully fetched interop parent header for chain {}: {:?}", chain_id, header.parent_hash);
             }
         }
 
@@ -178,7 +182,9 @@ where
         chain_id: u64,
         block_hash: B256,
     ) -> Result<Vec<OpReceiptEnvelope>, Self::Error> {
+        tracing::debug!("KONA: Fetching interop header by hash for receipts, chain {}: {:?}", chain_id, block_hash);
         let header = self.header_by_hash(chain_id, block_hash).await?;
+        tracing::debug!("KONA: Successfully fetched interop header for receipts, chain {}: {:?}", chain_id, block_hash);
         self.derive_receipts(chain_id, block_hash, &header).await
     }
 }

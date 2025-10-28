@@ -169,16 +169,20 @@ impl HintHandler for SingleChainHintHandler {
                 )?;
             }
             HintType::L2BlockHeader => {
+                tracing::debug!("KONA: Processing L2BlockHeader hint");
                 ensure!(hint.data.len() == 32, "Invalid hint data length");
 
                 // Fetch the raw header from the L2 chain provider.
                 let hash: B256 = hint.data.as_ref().try_into()?;
+                tracing::debug!("KONA: Fetching raw header for hash: {:?}", hash);
                 let raw_header: Bytes =
                     providers.l2.client().request("debug_getRawHeader", [hash]).await?;
 
                 // Acquire a lock on the key-value store and set the preimage.
+                tracing::debug!("KONA: Setting preimage for hash: {:?}", hash);
                 let mut kv_lock = kv.write().await;
                 kv_lock.set(PreimageKey::new_keccak256(*hash).into(), raw_header.into())?;
+                tracing::debug!("KONA: Successfully processed L2BlockHeader hint for hash: {:?}", hash);
             }
             HintType::L2Transactions => {
                 ensure!(hint.data.len() == 32, "Invalid hint data length");

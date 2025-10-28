@@ -80,8 +80,10 @@ where
         // In this case we need to fetch all transaction receipts from the L1 origin block so
         // we can scan for user deposits.
         let sequence_number = if l2_parent.l1_origin.number != epoch.number {
+            tracing::debug!("KONA: Fetching header by hash for epoch in attributes (first call): {:?}", epoch.hash);
             let header =
                 self.receipts_fetcher.header_by_hash(epoch.hash).await.map_err(Into::into)?;
+            tracing::debug!("KONA: Successfully fetched header for epoch in attributes (first call): {:?}", epoch.hash);
             if l2_parent.l1_origin.hash != header.parent_hash {
                 return Err(PipelineErrorKind::Reset(
                     BuilderError::BlockMismatchEpochReset(
@@ -116,8 +118,10 @@ where
                 ));
             }
 
+            tracing::debug!("KONA: Fetching header by hash for epoch in attributes (second call): {:?}", epoch.hash);
             let header =
                 self.receipts_fetcher.header_by_hash(epoch.hash).await.map_err(Into::into)?;
+            tracing::debug!("KONA: Successfully fetched header for epoch in attributes (second call): {:?}", epoch.hash);
             l1_header = header;
             deposit_transactions = vec![];
             l2_parent.seq_num + 1

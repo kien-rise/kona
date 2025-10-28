@@ -402,10 +402,12 @@ where
 
         // Walk back the block headers to the desired block number.
         while header.number > block_number {
+            tracing::debug!("KONA: Fetching header by hash in DB for block number {}: {:?}", block_number, header.parent_hash);
             header = self
                 .fetcher
                 .header_by_hash(header.parent_hash)
                 .map_err(|e| TrieDBError::Provider(e.to_string()))?;
+            tracing::debug!("KONA: Successfully fetched header in DB for block number {}: {:?}", block_number, header.parent_hash);
         }
 
         Ok(header.hash_slow())

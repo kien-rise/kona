@@ -72,9 +72,11 @@ where
     l2_provider.set_chain_id(boot.agreed_pre_state.active_l2_chain_id());
 
     // Fetch the safe head's block header.
+    tracing::debug!("KONA: Fetching safe head header by hash: {:?}", safe_head_hash);
     let safe_head = l2_provider
         .header_by_hash(safe_head_hash)
         .map(|header| Sealed::new_unchecked(header, safe_head_hash))?;
+    tracing::debug!("KONA: Successfully fetched safe head header: {:?}", safe_head_hash);
     let disputed_l2_block_number = safe_head.number + 1;
 
     // Check if we can no-op the transition. The Superchain STF happens once every second, but

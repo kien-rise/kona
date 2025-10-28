@@ -517,9 +517,11 @@ impl HintHandler for InteropHintHandler {
 
                         l2_provider.set_chain_id(Some(chain_id));
 
+                        tracing::debug!("KONA: Fetching safe head header by hash in host interop handler: {:?}", agreed_block_hash);
                         let safe_head = l2_provider
                             .header_by_hash(agreed_block_hash)
                             .map(|header| Sealed::new_unchecked(header, agreed_block_hash))?;
+                        tracing::debug!("KONA: Successfully fetched safe head header in host interop handler: {:?}", agreed_block_hash);
                         let target_block = safe_head.number + 1;
 
                         let cursor = new_oracle_pipeline_cursor(

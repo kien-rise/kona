@@ -63,9 +63,11 @@ where
     let beacon = OracleBlobProvider::new(oracle.clone());
 
     // Fetch the safe head's block header.
+    tracing::debug!("KONA: Fetching safe head header by hash: {:?}", safe_head_hash);
     let safe_head = l2_provider
         .header_by_hash(safe_head_hash)
         .map(|header| Sealed::new_unchecked(header, safe_head_hash))?;
+    tracing::debug!("KONA: Successfully fetched safe head header: {:?}", safe_head_hash);
 
     // If the claimed L2 block number is less than the safe head of the L2 chain, the claim is
     // invalid.
