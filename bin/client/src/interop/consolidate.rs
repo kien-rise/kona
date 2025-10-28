@@ -92,7 +92,9 @@ where
             .await?;
 
         // Fetch the header for the local-safe head of the current L2 chain.
+        tracing::debug!("KONA: Fetching header by hash for local safe block: {:?}", local_safe_block_hash);
         let header = local_provider.header_by_hash(local_safe_block_hash)?;
+        tracing::debug!("KONA: Successfully fetched header for local safe block: {:?}", local_safe_block_hash);
 
         headers.insert(cross_safe_output.chain_id, header.seal(local_safe_block_hash));
         l2_providers.insert(cross_safe_output.chain_id, local_provider);

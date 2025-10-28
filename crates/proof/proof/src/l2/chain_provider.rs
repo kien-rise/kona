@@ -62,7 +62,10 @@ impl<T: CommsClient> OracleL2ChainProvider<T> {
     /// L2 safe head.
     async fn header_by_number(&mut self, block_number: u64) -> Result<Header, OracleProviderError> {
         // Fetch the starting block header.
-        let mut header = self.header_by_hash(self.l2_safe_head().await?)?;
+        let safe_head_hash = self.l2_safe_head().await?;
+        tracing::debug!("KONA: Fetching header by hash for L2 safe head: {:?}", safe_head_hash);
+        let mut header = self.header_by_hash(safe_head_hash)?;
+        tracing::debug!("KONA: Successfully fetched header for L2 safe head: {:?}", safe_head_hash);
 
         // Check if the block number is in range. If not, we can fail early.
         if block_number > header.number {
@@ -86,10 +89,14 @@ impl<T: CommsClient> OracleL2ChainProvider<T> {
                         }
                     };
 
+                tracing::debug!("KONA: Fetching header by hash (EIP-2935): {:?}", block_hash);
                 header = self.header_by_hash(block_hash)?;
+                tracing::debug!("KONA: Successfully fetched header (EIP-2935): {:?}", block_hash);
             } else {
                 // Walk back the block headers one-by-one until the desired block number is reached.
+                tracing::debug!("KONA: Fetching parent header by hash: {:?}", header.parent_hash);
                 header = self.header_by_hash(header.parent_hash)?;
+                tracing::debug!("KONA: Successfully fetched parent header: {:?}", header.parent_hash);
             }
         }
 
@@ -206,15 +213,19 @@ impl<T: CommsClient> TrieDBProvider for OracleL2ChainProvider<T> {
     }
 
     fn header_by_hash(&self, hash: B256) -> Result<Header, OracleProviderError> {
+        tracing::debug!("KONA: header_by_hash called for hash: {:?}", hash);
         // Fetch the header from the caching oracle.
         crate::block_on(async move {
+            tracing::debug!("KONA: Sending L2BlockHeader hint for hash: {:?}", hash);
             HintType::L2BlockHeader
                 .with_data(&[hash.as_slice()])
                 .with_data(self.chain_id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec()))
                 .send(self.oracle.as_ref())
                 .await?;
+            tracing::debug!("KONA: Getting preimage for hash: {:?}", hash);
             let header_bytes = self.oracle.get(PreimageKey::new_keccak256(*hash)).await?;
 
+            tracing::debug!("KONA: Decoding header bytes for hash: {:?}", hash);
             Header::decode(&mut header_bytes.as_slice()).map_err(OracleProviderError::Rlp)
         })
     }
