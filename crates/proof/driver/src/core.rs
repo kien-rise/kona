@@ -215,50 +215,97 @@ where
         cfg: &RollupConfig,
         mut target: Option<u64>,
     ) -> DriverResult<(L2BlockInfo, B256), E::Error> {
+        tracing::debug!("KONA: Starting advance_to_target with target: {:?}", target);
+        
+        let mut iteration = 0u64;
         loop {
+            iteration += 1;
+            tracing::debug!("KONA: advance_to_target iteration #{}", iteration);
+            
             // Check if we have reached the target block number.
+            tracing::debug!("KONA: Reading pipeline cursor to check current progress");
             let pipeline_cursor = self.cursor.read();
             let tip_cursor = pipeline_cursor.tip();
+            
+            tracing::debug!("KONA: Current L2 safe head: number={}, hash={:?}", 
+                tip_cursor.l2_safe_head.block_info.number, tip_cursor.l2_safe_head.block_info.hash);
+            
             if let Some(tb) = target {
+                tracing::debug!("KONA: Checking if current block {} >= target block {}", 
+                    tip_cursor.l2_safe_head.block_info.number, tb);
+                    
                 if tip_cursor.l2_safe_head.block_info.number >= tb {
                     info!(target: "client", "Derivation complete, reached L2 safe head.");
+                    tracing::debug!("KONA: Target reached! Returning L2 safe head and output root");
                     return Ok((tip_cursor.l2_safe_head, tip_cursor.l2_safe_head_output_root));
                 }
+            } else {
+                tracing::debug!("KONA: No target specified, continuing derivation until data exhausted");
             }
 
+            // Step: Produce payload attributes from the pipeline
+            tracing::debug!("KONA: Producing payload for L2 safe head: {}", 
+                tip_cursor.l2_safe_head.block_info.number);
+            
             let mut attributes = match self.pipeline.produce_payload(tip_cursor.l2_safe_head).await
             {
-                Ok(attrs) => attrs.take_inner(),
+                Ok(attrs) => {
+                    tracing::debug!("KONA: Successfully produced payload attributes");
+                    attrs.take_inner()
+                },
                 Err(PipelineErrorKind::Critical(PipelineError::EndOfSource)) => {
                     warn!(target: "client", "Exhausted data source; Halting derivation and using current safe head.");
+                    tracing::debug!("KONA: Pipeline reached end of source, adjusting target if needed");
 
                     // Adjust the target block number to the current safe head, as no more blocks
                     // can be produced.
                     if target.is_some() {
+                        let old_target = target;
                         target = Some(tip_cursor.l2_safe_head.block_info.number);
+                        tracing::debug!("KONA: Adjusted target from {:?} to {:?} due to data exhaustion", 
+                            old_target, target);
                     };
 
                     // If we are in interop mode, this error must be handled by the caller.
                     // Otherwise, we continue the loop to halt derivation on the next iteration.
-                    if cfg.is_interop_active(self.cursor.read().l2_safe_head().block_info.number) {
+                    let current_block_num = self.cursor.read().l2_safe_head().block_info.number;
+                    if cfg.is_interop_active(current_block_num) {
+                        tracing::debug!("KONA: Interop mode active at block {}, returning EndOfSource error", 
+                            current_block_num);
                         return Err(PipelineError::EndOfSource.crit().into());
                     } else {
+                        tracing::debug!("KONA: Not in interop mode, continuing loop to halt derivation");
                         continue;
                     }
                 }
                 Err(e) => {
                     error!(target: "client", "Failed to produce payload: {:?}", e);
+                    tracing::error!("KONA: Pipeline failed to produce payload: {:?}", e);
                     return Err(DriverError::Pipeline(e));
                 }
             };
 
+            // Step: Update executor safe head and execute payload
+            tracing::debug!("KONA: Updating executor safe head to: {}", 
+                tip_cursor.l2_safe_head.block_info.number);
             self.executor.update_safe_head(tip_cursor.l2_safe_head_header.clone());
+            
+            tracing::debug!("KONA: Executing payload with timestamp: {}", 
+                attributes.payload_attributes.timestamp);
+            let tx_count = attributes.transactions.as_ref().map(|txs| txs.len()).unwrap_or(0);
+            tracing::debug!("KONA: Payload contains {} transactions", tx_count);
+            
             let outcome = match self.executor.execute_payload(attributes.clone()).await {
-                Ok(outcome) => outcome,
+                Ok(outcome) => {
+                    tracing::debug!("KONA: Successfully executed payload, produced block header");
+                    outcome
+                },
                 Err(e) => {
                     error!(target: "client", "Failed to execute L2 block: {}", e);
+                    tracing::error!("KONA: Executor failed to execute payload: {}", e);
 
                     if cfg.is_holocene_active(attributes.payload_attributes.timestamp) {
+                        tracing::debug!("KONA: Holocene is active, attempting deposit-only retry");
                         // Retry with a deposit-only block.
                         warn!(target: "client", "Flushing current channel and retrying deposit only block");
 
@@ -266,35 +313,50 @@ where
                         // deposit-only block due to execution failure, the
                         // batch and channel it is contained in is forwards
                         // invalidated.
+                        tracing::debug!("KONA: Flushing channel due to execution failure");
                         self.pipeline.signal(Signal::FlushChannel).await?;
 
                         // Strip out all transactions that are not deposits.
+                        let original_tx_count = tx_count;
                         attributes.transactions = attributes.transactions.map(|txs| {
                             txs.into_iter()
                                 .filter(|tx| !tx.is_empty() && tx[0] == OpTxType::Deposit as u8)
                                 .collect::<Vec<_>>()
                         });
+                        let deposit_tx_count = attributes.transactions.as_ref().map(|txs| txs.len()).unwrap_or(0);
+                        tracing::debug!("KONA: Filtered transactions from {} to {} (deposits only)", 
+                            original_tx_count, deposit_tx_count);
 
                         // Retry the execution.
+                        tracing::debug!("KONA: Retrying execution with deposit-only block");
                         self.executor.update_safe_head(tip_cursor.l2_safe_head_header.clone());
                         match self.executor.execute_payload(attributes.clone()).await {
-                            Ok(header) => header,
+                            Ok(header) => {
+                                tracing::debug!("KONA: Successfully executed deposit-only block");
+                                header
+                            },
                             Err(e) => {
                                 error!(
                                     target: "client",
                                     "Critical - Failed to execute deposit-only block: {e}",
                                 );
+                                tracing::error!("KONA: Critical failure - deposit-only block execution failed: {}", e);
                                 return Err(DriverError::Executor(e));
                             }
                         }
                     } else {
+                        tracing::debug!("KONA: Pre-Holocene mode, discarding failed block and continuing");
                         // Pre-Holocene, discard the block if execution fails.
                         continue;
                     }
                 }
             };
 
-            // Construct the block.
+            // Step: Construct the block from execution outcome
+            tracing::debug!("KONA: Constructing OpBlock from execution outcome");
+            let final_tx_count = attributes.transactions.as_ref().unwrap_or(&Vec::new()).len();
+            tracing::debug!("KONA: Block will contain {} transactions", final_tx_count);
+            
             let block = OpBlock {
                 header: outcome.header.inner().clone(),
                 body: BlockBody {
@@ -309,25 +371,47 @@ where
                     withdrawals: None,
                 },
             };
+            tracing::debug!("KONA: Successfully constructed OpBlock with hash: {:?}", 
+                block.header.hash_slow());
 
-            // Get the pipeline origin and update the tip cursor.
+            // Step: Get the pipeline origin and create L2BlockInfo
+            tracing::debug!("KONA: Getting pipeline origin");
             let origin = self.pipeline.origin().ok_or(PipelineError::MissingOrigin.crit())?;
+            tracing::debug!("KONA: Pipeline origin: number={}, hash={:?}", 
+                origin.number, origin.hash);
+
+            tracing::debug!("KONA: Creating L2BlockInfo from block and genesis");
             let l2_info = L2BlockInfo::from_block_and_genesis(
                 &block,
                 &self.pipeline.rollup_config().genesis,
             )?;
+            tracing::debug!("KONA: Created L2BlockInfo - L1 origin: {:?}, sequence: {}", 
+                l2_info.l1_origin, l2_info.seq_num);
+
+            // Step: Compute output root and create tip cursor
+            tracing::debug!("KONA: Computing output root");
+            let output_root = self.executor.compute_output_root().map_err(DriverError::Executor)?;
+            tracing::debug!("KONA: Computed output root: {:?}", output_root);
+            
             let tip_cursor = TipCursor::new(
                 l2_info,
                 outcome.header.clone(),
-                self.executor.compute_output_root().map_err(DriverError::Executor)?,
+                output_root,
             );
+            tracing::debug!("KONA: Created new TipCursor for block {}", 
+                tip_cursor.l2_safe_head.block_info.number);
 
-            // Advance the derivation pipeline cursor
+            // Step: Advance the derivation pipeline cursor
+            tracing::debug!("KONA: Advancing derivation pipeline cursor");
             drop(pipeline_cursor);
             self.cursor.write().advance(origin, tip_cursor);
+            tracing::debug!("KONA: Successfully advanced pipeline cursor");
 
-            // Update the latest safe head artifacts.
+            // Step: Update the latest safe head artifacts
+            tracing::debug!("KONA: Updating safe head artifacts");
             self.safe_head_artifacts = Some((outcome, attributes.transactions.unwrap_or_default()));
+            
+            tracing::debug!("KONA: Completed iteration #{}, continuing to next block", iteration);
         }
     }
 }
