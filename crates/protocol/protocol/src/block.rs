@@ -181,29 +181,81 @@ impl L2BlockInfo {
         block: &Block<T>,
         genesis: &ChainGenesis,
     ) -> Result<Self, FromBlockError> {
+        tracing::debug!("KONA: Starting from_block_and_genesis construction");
+        
+        // Step 1: Extract block info from the block
+        tracing::debug!("KONA: Extracting block info from block");
         let block_info = BlockInfo::from(block);
+        tracing::debug!("KONA: Block info extracted - number: {}, hash: {:?}, parent: {:?}, timestamp: {}", 
+            block_info.number, block_info.hash, block_info.parent_hash, block_info.timestamp);
 
+        // Step 2: Check if this is the genesis block or a regular block
+        tracing::debug!("KONA: Comparing block number {} with genesis L2 number {}", 
+            block_info.number, genesis.l2.number);
+        
         let (l1_origin, sequence_number) = if block_info.number == genesis.l2.number {
+            tracing::debug!("KONA: This is the genesis block, validating genesis hash");
+            
+            // Step 2a: Genesis block path
             if block_info.hash != genesis.l2.hash {
+                tracing::error!("KONA: Genesis hash mismatch - expected: {:?}, got: {:?}", 
+                    genesis.l2.hash, block_info.hash);
                 return Err(FromBlockError::InvalidGenesisHash);
             }
+            
+            tracing::debug!("KONA: Genesis block validated, using genesis L1 origin: {:?}, sequence: 0", 
+                genesis.l1);
             (genesis.l1, 0)
         } else {
+            tracing::debug!("KONA: This is a regular block, processing L1 info deposit transaction");
+            
+            // Step 2b: Regular block path - check for transactions
             if block.body.transactions.is_empty() {
+                tracing::error!("KONA: Block has no transactions, missing L1 info deposit for block: {:?}", 
+                    block_info.hash);
                 return Err(FromBlockError::MissingL1InfoDeposit(block_info.hash));
             }
+            
+            tracing::debug!("KONA: Block has {} transactions, examining first transaction", 
+                block.body.transactions.len());
 
+            // Step 2c: Get first transaction and verify it's a deposit
             let tx = block.body.transactions[0].as_ref();
+            tracing::debug!("KONA: First transaction type: {:?}", tx.ty());
+            
             let Some(tx) = tx.as_deposit() else {
+                tracing::error!("KONA: First transaction is not a deposit, type: {:?}", tx.ty());
                 return Err(FromBlockError::FirstTxNonDeposit(tx.ty()));
             };
+            
+            tracing::debug!("KONA: First transaction is a deposit, decoding L1 block info");
 
+            // Step 2d: Decode L1 block info from deposit transaction
+            let input_len = tx.input().len();
+            tracing::debug!("KONA: Deposit transaction input length: {}", input_len);
+            
             let l1_info = L1BlockInfoTx::decode_calldata(tx.input().as_ref())
                 .map_err(FromBlockError::BlockInfoDecodeError)?;
-            (l1_info.id(), l1_info.sequence_number())
+            
+            let l1_origin_info = l1_info.id();
+            let sequence_num = l1_info.sequence_number();
+            
+            tracing::debug!("KONA: Successfully decoded L1 block info - L1 origin: {:?}, sequence: {}", 
+                l1_origin_info, sequence_num);
+            
+            (l1_origin_info, sequence_num)
         };
 
-        Ok(Self { block_info, l1_origin, seq_num: sequence_number })
+        // Step 3: Construct the final L2BlockInfo
+        tracing::debug!("KONA: Constructing L2BlockInfo with L1 origin: {:?}, sequence: {}", 
+            l1_origin, sequence_number);
+        
+        let l2_block_info = Self { block_info, l1_origin, seq_num: sequence_number };
+        
+        tracing::debug!("KONA: Successfully completed from_block_and_genesis - block: {}, L1 origin: {}, sequence: {}", 
+            l2_block_info.block_info.number, l2_block_info.l1_origin.number, l2_block_info.seq_num);
+        
+        Ok(l2_block_info)
     }
 
     /// Constructs an [`L2BlockInfo`] From a given [`OpExecutionPayload`] and [`ChainGenesis`].

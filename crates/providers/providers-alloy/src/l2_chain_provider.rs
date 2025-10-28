@@ -218,12 +218,39 @@ impl BatchValidationProvider for AlloyL2ChainProvider {
     type Error = AlloyL2ChainProviderError;
 
     async fn l2_block_info_by_number(&mut self, number: u64) -> Result<L2BlockInfo, Self::Error> {
+        tracing::debug!("KONA: Starting l2_block_info_by_number for block number: {}", number);
+        
+        // Step 1: Fetch the block by number
+        tracing::debug!("KONA: Fetching L2 block by number: {}", number);
         let block = self
             .block_by_number(number)
             .await
-            .map_err(|_| AlloyL2ChainProviderError::BlockNotFound(number))?;
-        L2BlockInfo::from_block_and_genesis(&block, &self.rollup_config.genesis)
-            .map_err(|_| AlloyL2ChainProviderError::L2BlockInfoConstruction(number))
+            .map_err(|e| {
+                tracing::error!("KONA: Failed to fetch L2 block by number {}: {:?}", number, e);
+                AlloyL2ChainProviderError::BlockNotFound(number)
+            })?;
+        
+        tracing::debug!("KONA: Successfully fetched L2 block {} - hash: {:?}, parent: {:?}, transactions: {}", 
+            number, block.header.hash_slow(), block.header.parent_hash, block.body.transactions.len());
+
+        // Step 2: Convert block to L2BlockInfo using genesis config
+        tracing::debug!("KONA: Converting block to L2BlockInfo using genesis config");
+        tracing::debug!("KONA: Genesis L1: number={}, hash={:?}", 
+            self.rollup_config.genesis.l1.number, self.rollup_config.genesis.l1.hash);
+        tracing::debug!("KONA: Genesis L2: number={}, hash={:?}", 
+            self.rollup_config.genesis.l2.number, self.rollup_config.genesis.l2.hash);
+        
+        let l2_block_info = L2BlockInfo::from_block_and_genesis(&block, &self.rollup_config.genesis)
+            .map_err(|e| {
+                tracing::error!("KONA: Failed to construct L2BlockInfo from block {} and genesis: {:?}", number, e);
+                AlloyL2ChainProviderError::L2BlockInfoConstruction(number)
+            })?;
+
+        tracing::debug!("KONA: Successfully created L2BlockInfo for block {} - L1 origin: {:?}, sequence: {}", 
+            number, l2_block_info.l1_origin, l2_block_info.seq_num);
+
+        tracing::debug!("KONA: Completed l2_block_info_by_number for block number: {}", number);
+        Ok(l2_block_info)
     }
 
     async fn block_by_number(&mut self, number: u64) -> Result<OpBlock, Self::Error> {
