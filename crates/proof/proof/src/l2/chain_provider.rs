@@ -51,9 +51,35 @@ impl<T: CommsClient> OracleL2ChainProvider<T> {
     /// Fetches the latest known safe head block hash according to the derivation pipeline cursor
     /// or uses the initial l2_head value if no cursor is set.
     pub async fn l2_safe_head(&self) -> Result<B256, OracleProviderError> {
-        self.cursor
-            .as_ref()
-            .map_or(Ok(self.l2_head), |cursor| Ok(cursor.read().l2_safe_head().block_info.hash))
+        tracing::debug!("KONA: Starting l2_safe_head lookup");
+        
+        // Step 1: Check if we have a cursor available
+        tracing::debug!("KONA: Checking if derivation pipeline cursor is available");
+        let cursor_option = self.cursor.as_ref();
+        
+        if cursor_option.is_none() {
+            tracing::debug!("KONA: No derivation pipeline cursor found, using initial l2_head: {:?}", self.l2_head);
+            return Ok(self.l2_head);
+        }
+        
+        // Step 2: We have a cursor, so we need to read from it
+        tracing::debug!("KONA: Derivation pipeline cursor found, reading from cursor");
+        let cursor = cursor_option.unwrap();
+        
+        // Step 3: Acquire read lock on the cursor
+        tracing::debug!("KONA: Acquiring read lock on derivation pipeline cursor");
+        let cursor_guard = cursor.read();
+        
+        // Step 4: Get the safe head from the cursor
+        tracing::debug!("KONA: Getting L2 safe head from cursor");
+        let safe_head_info = cursor_guard.l2_safe_head();
+        
+        // Step 5: Extract the block hash from the safe head info
+        tracing::debug!("KONA: Extracting block hash from safe head info");
+        let safe_head_hash = safe_head_info.block_info.hash;
+        
+        tracing::debug!("KONA: Successfully retrieved L2 safe head hash from cursor: {:?}", safe_head_hash);
+        Ok(safe_head_hash)
     }
 }
 
