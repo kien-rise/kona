@@ -30,13 +30,13 @@ where
     // Step 1: Get L2 block info for the safe header
     tracing::debug!("KONA: Fetching L2 block info for safe header number: {}", safe_header.number);
     let safe_head_info = l2_chain_provider.l2_block_info_by_number(safe_header.number).await?;
-    tracing::debug!("KONA: Successfully fetched L2 block info - L1 origin number: {}, L1 origin hash: {:?}", 
+    tracing::debug!("KONA: Successfully fetched L2 block info - L1 origin number: {}, L1 origin hash: {:?}",
         safe_head_info.l1_origin.number, safe_head_info.l1_origin.hash);
 
     // Step 2: Get L1 origin block info
     tracing::debug!("KONA: Fetching L1 origin block info for number: {}", safe_head_info.l1_origin.number);
     let l1_origin = chain_provider.block_info_by_number(safe_head_info.l1_origin.number).await?;
-    tracing::debug!("KONA: Successfully fetched L1 origin block info - number: {}, hash: {:?}", 
+    tracing::debug!("KONA: Successfully fetched L1 origin block info - number: {}, hash: {:?}",
         l1_origin.number, l1_origin.hash);
 
     // Walk back the starting L1 block by `channel_timeout` to ensure that the full channel is
@@ -45,14 +45,14 @@ where
     tracing::debug!("KONA: Calculating channel timeout for timestamp: {}", safe_head_info.block_info.timestamp);
     let channel_timeout = rollup_config.channel_timeout(safe_head_info.block_info.timestamp);
     tracing::debug!("KONA: Channel timeout calculated: {}", channel_timeout);
-    
+
     let original_l1_origin_number = l1_origin.number;
     let mut l1_origin_number = l1_origin.number.saturating_sub(channel_timeout);
-    tracing::debug!("KONA: L1 origin number after channel timeout subtraction: {} (was {})", 
+    tracing::debug!("KONA: L1 origin number after channel timeout subtraction: {} (was {})",
         l1_origin_number, original_l1_origin_number);
-    
+
     if l1_origin_number < rollup_config.genesis.l1.number {
-        tracing::debug!("KONA: L1 origin number {} is less than genesis L1 number {}, using genesis", 
+        tracing::debug!("KONA: L1 origin number {} is less than genesis L1 number {}, using genesis",
             l1_origin_number, rollup_config.genesis.l1.number);
         l1_origin_number = rollup_config.genesis.l1.number;
     }
@@ -61,7 +61,7 @@ where
     // Step 4: Get the actual origin block info
     tracing::debug!("KONA: Fetching final origin block info for number: {}", l1_origin_number);
     let origin = chain_provider.block_info_by_number(l1_origin_number).await?;
-    tracing::debug!("KONA: Successfully fetched final origin block info - number: {}, hash: {:?}", 
+    tracing::debug!("KONA: Successfully fetched final origin block info - number: {}, hash: {:?}",
         origin.number, origin.hash);
 
     // Construct the cursor.
@@ -73,7 +73,23 @@ where
     // Step 6: Create tip cursor
     tracing::debug!("KONA: Creating TipCursor with safe head info");
     let tip = TipCursor::new(safe_head_info, safe_header, B256::ZERO);
-    tracing::debug!("KONA: TipCursor created successfully");
+    
+    // Detailed TipCursor properties inspection
+    tracing::debug!("KONA: TipCursor created successfully - inspecting properties:");
+    tracing::debug!("KONA: TipCursor.l2_safe_head.block_info.number: {}", tip.l2_safe_head.block_info.number);
+    tracing::debug!("KONA: TipCursor.l2_safe_head.block_info.hash: {:?}", tip.l2_safe_head.block_info.hash);
+    tracing::debug!("KONA: TipCursor.l2_safe_head.block_info.parent_hash: {:?}", tip.l2_safe_head.block_info.parent_hash);
+    tracing::debug!("KONA: TipCursor.l2_safe_head.block_info.timestamp: {}", tip.l2_safe_head.block_info.timestamp);
+    tracing::debug!("KONA: TipCursor.l2_safe_head.l1_origin.number: {}", tip.l2_safe_head.l1_origin.number);
+    tracing::debug!("KONA: TipCursor.l2_safe_head.l1_origin.hash: {:?}", tip.l2_safe_head.l1_origin.hash);
+    tracing::debug!("KONA: TipCursor.l2_safe_head.seq_num: {}", tip.l2_safe_head.seq_num);
+    tracing::debug!("KONA: TipCursor.l2_safe_head_header.number: {}", tip.l2_safe_head_header.number);
+    tracing::debug!("KONA: TipCursor.l2_safe_head_header.hash: {:?}", tip.l2_safe_head_header.hash_slow());
+    tracing::debug!("KONA: TipCursor.l2_safe_head_header.parent_hash: {:?}", tip.l2_safe_head_header.parent_hash);
+    tracing::debug!("KONA: TipCursor.l2_safe_head_header.timestamp: {}", tip.l2_safe_head_header.timestamp);
+    tracing::debug!("KONA: TipCursor.l2_safe_head_header.gas_used: {}", tip.l2_safe_head_header.gas_used);
+    tracing::debug!("KONA: TipCursor.l2_safe_head_header.gas_limit: {}", tip.l2_safe_head_header.gas_limit);
+    tracing::debug!("KONA: TipCursor.l2_safe_head_output_root: {:?}", tip.l2_safe_head_output_root);
 
     // Step 7: Advance the cursor
     tracing::debug!("KONA: Advancing cursor with origin and tip");
@@ -84,7 +100,7 @@ where
     // Step 8: Wrap in shared lock
     tracing::debug!("KONA: Wrapping cursor in shared RwLock");
     let cursor_arc = Arc::new(RwLock::new(cursor));
-    
+
     tracing::debug!("KONA: Successfully completed new_oracle_pipeline_cursor construction");
     Ok(cursor_arc)
 }

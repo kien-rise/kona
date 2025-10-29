@@ -135,12 +135,41 @@ impl<T: CommsClient + Send + Sync> BatchValidationProvider for OracleL2ChainProv
     type Error = OracleProviderError;
 
     async fn l2_block_info_by_number(&mut self, number: u64) -> Result<L2BlockInfo, Self::Error> {
-        // Get the block at the given number.
-        let block = self.block_by_number(number).await?;
+        tracing::debug!("KONA: Starting l2_block_info_by_number for block number: {}", number);
+        tracing::debug!("KONA: Using chain ID: {:?}", self.chain_id);
 
-        // Construct the system config from the payload.
-        L2BlockInfo::from_block_and_genesis(&block, &self.rollup_config.genesis)
-            .map_err(OracleProviderError::BlockInfo)
+        // Step 1: Get the block at the given number
+        tracing::debug!("KONA: Fetching L2 block by number: {}", number);
+        let block = self.block_by_number(number).await
+            .map_err(|e| {
+                tracing::error!("KONA: Failed to fetch L2 block by number {}: {:?}", number, e);
+                e
+            })?;
+        
+        tracing::debug!("KONA: Successfully fetched L2 block {} - hash: {:?}, parent: {:?}, tx count: {}", 
+            number, block.header.hash_slow(), block.header.parent_hash, block.body.transactions.len());
+        tracing::debug!("KONA: Block timestamp: {}, gas_used: {}, gas_limit: {}", 
+            block.header.timestamp, block.header.gas_used, block.header.gas_limit);
+
+        // Step 2: Get genesis configuration info for logging
+        tracing::debug!("KONA: Using genesis config - L1: {:?}, L2: {:?}", 
+            self.rollup_config.genesis.l1, self.rollup_config.genesis.l2);
+
+        // Step 3: Construct the L2BlockInfo from the payload and genesis
+        tracing::debug!("KONA: Converting block to L2BlockInfo using genesis configuration");
+        let l2_block_info = L2BlockInfo::from_block_and_genesis(&block, &self.rollup_config.genesis)
+            .map_err(|e| {
+                tracing::error!("KONA: Failed to construct L2BlockInfo from block {} and genesis: {:?}", number, e);
+                OracleProviderError::BlockInfo(e)
+            })?;
+
+        tracing::debug!("KONA: Successfully created L2BlockInfo for block {} - L1 origin: {:?}, sequence: {}", 
+            number, l2_block_info.l1_origin, l2_block_info.seq_num);
+        tracing::debug!("KONA: L2BlockInfo timestamp: {}, block hash: {:?}", 
+            l2_block_info.block_info.timestamp, l2_block_info.block_info.hash);
+
+        tracing::debug!("KONA: Completed l2_block_info_by_number for block number: {}", number);
+        Ok(l2_block_info)
     }
 
     async fn block_by_number(&mut self, number: u64) -> Result<OpBlock, Self::Error> {
