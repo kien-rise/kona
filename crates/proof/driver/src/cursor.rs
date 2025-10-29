@@ -162,15 +162,49 @@ impl PipelineCursor {
     /// Called by the driver after successfully deriving an L2 block from L1 data
     /// to advance the derivation state and maintain the cursor cache.
     pub fn advance(&mut self, origin: BlockInfo, l2_tip_block: TipCursor) {
+        tracing::debug!("KONA: Starting cursor.advance operation");
+
+        // Log input parameters
+        tracing::debug!("KONA: Origin block: number={}, hash={:?}, parent={:?}, timestamp={}",
+            origin.number, origin.hash, origin.parent_hash, origin.timestamp);
+        tracing::debug!("KONA: L2 tip block: number={}, hash={:?}, L1_origin={:?}, seq_num={}",
+            l2_tip_block.l2_safe_head.block_info.number,
+            l2_tip_block.l2_safe_head.block_info.hash,
+            l2_tip_block.l2_safe_head.l1_origin,
+            l2_tip_block.l2_safe_head.seq_num);
+
+        // Log current cursor state before changes
+        tracing::debug!("KONA: Current cursor state - capacity: {}, tips.len(): {}, origins.len(): {}",
+            self.capacity, self.tips.len(), self.origins.len());
+        tracing::debug!("KONA: Current origin: number={}, hash={:?}",
+            self.origin.number, self.origin.hash);
+
+        // Step 1: Handle capacity management - evict oldest if at capacity
         if self.tips.len() >= self.capacity {
+            tracing::debug!("KONA: Cursor at capacity ({}), evicting oldest entry", self.capacity);
             let key = self.origins.pop_front().unwrap();
-            self.tips.remove(&key);
+            let removed_tip = self.tips.remove(&key);
+            tracing::debug!("KONA: Evicted origin block number: {}, had tip: {}",
+                key, removed_tip.is_some());
+        } else {
+            tracing::debug!("KONA: Cursor has space ({}/{}), no eviction needed",
+                self.tips.len(), self.capacity);
         }
 
+        // Step 2: Update cursor state with new origin and tip
+        tracing::debug!("KONA: Updating cursor with new origin and tip");
         self.origin = origin;
         self.origins.push_back(origin.number);
         self.origin_infos.insert(origin.number, origin);
         self.tips.insert(origin.number, l2_tip_block);
+
+        // Log final cursor state after changes
+        tracing::debug!("KONA: Updated cursor state - tips.len(): {}, origins.len(): {}",
+            self.tips.len(), self.origins.len());
+        tracing::debug!("KONA: New current origin: number={}, hash={:?}",
+            self.origin.number, self.origin.hash);
+
+        tracing::debug!("KONA: Successfully completed cursor.advance operation");
     }
 
     /// Resets the cursor state due to an L1 reorganization.
