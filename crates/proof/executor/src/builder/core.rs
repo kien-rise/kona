@@ -206,30 +206,63 @@ where
         &mut self,
         attrs: OpPayloadAttributes,
     ) -> ExecutorResult<BlockBuildingOutcome> {
+        tracing::debug!("KONA: Starting build_block operation");
+        tracing::debug!("KONA: attrs.eip_1559_params: {:?}", attrs.eip_1559_params);
+        tracing::debug!("KONA: attrs.gas_limit: {:?}", attrs.gas_limit);
+        tracing::debug!("KONA: attrs.payload_attributes.timestamp: {}", attrs.payload_attributes.timestamp);
+        tracing::debug!("KONA: attrs.payload_attributes.suggested_fee_recipient: {:?}", attrs.payload_attributes.suggested_fee_recipient);
+        tracing::debug!("KONA: attrs.payload_attributes.prev_randao: {:?}", attrs.payload_attributes.prev_randao);
+        tracing::debug!("KONA: attrs.payload_attributes.parent_beacon_block_root: {:?}", attrs.payload_attributes.parent_beacon_block_root);
+        
+        if let Some(ref txs) = attrs.transactions {
+            tracing::debug!("KONA: Number of transactions in payload: {}", txs.len());
+        } else {
+            tracing::debug!("KONA: No transactions in payload");
+        }
+
         // Step 1. Set up the execution environment.
+        tracing::debug!("KONA: Setting up execution environment with base fee params");
+        let parent_header = self.trie_db.parent_block_header();
+        tracing::debug!("KONA: Parent block number: {}, timestamp: {}", parent_header.number, parent_header.timestamp);
+        
         let (base_fee_params, min_base_fee) = Self::active_base_fee_params(
             self.config,
-            self.trie_db.parent_block_header(),
+            parent_header,
             attrs.payload_attributes.timestamp,
         )?;
+        tracing::debug!("KONA: Computed base_fee_params: {:?}, min_base_fee: {}", base_fee_params, min_base_fee);
+        tracing::debug!("KONA: Creating EVM environment");
+        let spec_id = self.config.spec_id(attrs.payload_attributes.timestamp);
+        tracing::debug!("KONA: Using spec ID: {:?} for timestamp: {}", spec_id, attrs.payload_attributes.timestamp);
+        
         let evm_env = self.evm_env(
-            self.config.spec_id(attrs.payload_attributes.timestamp),
+            spec_id,
             self.trie_db.parent_block_header(),
             &attrs,
             &base_fee_params,
             min_base_fee,
         )?;
+        tracing::debug!("KONA: EVM environment created successfully");
+        
         let block_env = evm_env.block_env().clone();
+        tracing::debug!("KONA: Block env - number: {}, gas_limit: {}, basefee: {}", 
+            block_env.number, block_env.gas_limit, block_env.basefee);
+        
         let parent_hash = self.trie_db.parent_block_header().seal();
+        tracing::debug!("KONA: Parent hash: {:?}", parent_hash);
 
         // Attempt to send a payload witness hint to the host. This hint instructs the host to
         // populate its preimage store with the preimages required to statelessly execute
         // this payload. This feature is experimental, so if the hint fails, we continue
         // without it and fall back on on-demand preimage fetching for execution.
-        self.trie_db
-            .hinter
-            .hint_execution_witness(parent_hash, &attrs)
-            .map_err(|e| TrieDBError::Provider(e.to_string()))?;
+        tracing::debug!("KONA: Attempting to send payload witness hint to host");
+        match self.trie_db.hinter.hint_execution_witness(parent_hash, &attrs) {
+            Ok(_) => tracing::debug!("KONA: Payload witness hint sent successfully"),
+            Err(e) => {
+                tracing::debug!("KONA: Payload witness hint failed: {}, continuing with on-demand fetching", e);
+                return Err(TrieDBError::Provider(e.to_string()).into());
+            }
+        }
 
         info!(
             target: "block_builder",
@@ -241,26 +274,40 @@ where
         );
 
         // Step 2. Create the executor, using the trie database.
+        tracing::debug!("KONA: Creating state and executor for block execution");
         let mut state = State::builder()
             .with_database(&mut self.trie_db)
             .with_bundle_update()
             .without_state_clear()
             .build();
+        tracing::debug!("KONA: State builder configured successfully");
+        
         let evm = self.factory.evm_factory().create_evm(&mut state, evm_env);
+        tracing::debug!("KONA: EVM created successfully");
+        
         let ctx = OpBlockExecutionCtx {
             parent_hash,
             parent_beacon_block_root: attrs.payload_attributes.parent_beacon_block_root,
             // This field is unused for individual block building jobs.
             extra_data: Default::default(),
         };
+        tracing::debug!("KONA: OpBlockExecutionCtx created with parent_hash: {:?}, parent_beacon_block_root: {:?}", 
+            ctx.parent_hash, ctx.parent_beacon_block_root);
+        
         let executor = self.factory.create_executor(evm, ctx);
+        tracing::debug!("KONA: Block executor created successfully");
 
         // Step 3. Execute the block containing the transactions within the payload attributes.
+        tracing::debug!("KONA: Recovering transactions from payload attributes");
         let transactions = attrs
             .recovered_transactions_with_encoded()
             .collect::<Result<Vec<_>, RecoveryError>>()
             .map_err(ExecutorError::Recovery)?;
+        tracing::debug!("KONA: Successfully recovered {} transactions", transactions.len());
+        
+        tracing::debug!("KONA: Executing block with recovered transactions");
         let ex_result = executor.execute_block(transactions.iter())?;
+        tracing::debug!("KONA: Block execution completed - gas_used: {}", ex_result.gas_used);
 
         info!(
             target: "block_builder",
@@ -270,9 +317,14 @@ where
         );
 
         // Step 4. Merge state transitions and seal the block.
+        tracing::debug!("KONA: Merging state transitions and preparing bundle");
         state.merge_transitions(BundleRetention::Reverts);
         let bundle = state.take_bundle();
+        tracing::debug!("KONA: State bundle created, calling seal_block");
+        tracing::debug!("KONA: Passing attrs.eip_1559_params to seal_block: {:?}", attrs.eip_1559_params);
+        
         let header = self.seal_block(&attrs, parent_hash, &block_env, &ex_result, bundle)?;
+        tracing::debug!("KONA: Block sealing completed successfully");
 
         info!(
             target: "block_builder",
@@ -285,7 +337,11 @@ where
         );
 
         // Update the parent block hash in the state database, preparing for the next block.
+        tracing::debug!("KONA: Updating parent block header in trie database");
         self.trie_db.set_parent_block_header(header.clone());
+        tracing::debug!("KONA: Parent block header updated successfully");
+        
+        tracing::debug!("KONA: Successfully completed build_block operation");
         Ok((header, ex_result).into())
     }
 }

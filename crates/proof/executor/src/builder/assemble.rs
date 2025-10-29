@@ -34,10 +34,23 @@ where
         ex_result: &BlockExecutionResult<OpReceiptEnvelope>,
         bundle: BundleState,
     ) -> ExecutorResult<Sealed<Header>> {
+        tracing::debug!("KONA: Starting seal_block operation");
+
         let timestamp = block_env.timestamp.saturating_to::<u64>();
+        tracing::debug!("KONA: eip_1559_params: {:?}", attrs.eip_1559_params);
+        tracing::debug!("KONA: Block timestamp: {}", timestamp);
+        tracing::debug!("KONA: Block number: {}", block_env.number.saturating_to::<u64>());
+        tracing::debug!("KONA: Parent hash: {:?}", parent_hash);
+        tracing::debug!("KONA: Gas used in execution: {}", ex_result.gas_used);
+        tracing::debug!("KONA: Number of receipts: {}", ex_result.receipts.len());
 
         // Compute the roots for the block header.
+        tracing::debug!("KONA: Computing state root from bundle");
         let state_root = self.trie_db.state_root(&bundle)?;
+        tracing::debug!("KONA: Computed state root: {:?}", state_root);
+        tracing::debug!("KONA: Computing transactions root");
+        let tx_count = attrs.transactions.as_ref().map(|txs| txs.len()).unwrap_or(0);
+        tracing::debug!("KONA: Number of transactions: {}", tx_count);
         let transactions_root = ordered_trie_with_encoder(
             // SAFETY: The OP Stack protocol will never generate a payload attributes with an empty
             // transactions field. Panicking here is the desired behavior, as it indicates a severe
@@ -46,45 +59,84 @@ where
             |tx, buf| buf.put_slice(tx.as_ref()),
         )
         .root();
+        tracing::debug!("KONA: Computed transactions root: {:?}", transactions_root);
+
+        tracing::debug!("KONA: Computing receipts root");
         let receipts_root = compute_receipts_root(&ex_result.receipts, self.config, timestamp);
+        tracing::debug!("KONA: Computed receipts root: {:?}", receipts_root);
+
+        tracing::debug!("KONA: Determining withdrawals root based on hardfork activation");
         let withdrawals_root = if self.config.is_isthmus_active(timestamp) {
+            tracing::debug!("KONA: Isthmus active, computing message passer account root");
             Some(self.message_passer_account(block_env.number.saturating_to::<u64>())?)
         } else if self.config.is_canyon_active(timestamp) {
+            tracing::debug!("KONA: Canyon active, using empty root hash");
             Some(EMPTY_ROOT_HASH)
         } else {
+            tracing::debug!("KONA: Pre-Canyon, no withdrawals root");
             None
         };
+        tracing::debug!("KONA: Withdrawals root: {:?}", withdrawals_root);
 
         // Compute the logs bloom from the receipts generated during block execution.
+        tracing::debug!("KONA: Computing logs bloom from receipts");
+        let total_logs = ex_result.receipts.iter().map(|r| r.logs().len()).sum::<usize>();
+        tracing::debug!("KONA: Total logs across all receipts: {}", total_logs);
         let logs_bloom = logs_bloom(ex_result.receipts.iter().flat_map(|r| r.logs()));
+        tracing::debug!("KONA: Computed logs bloom");
 
         // Compute Cancun fields, if active.
+        tracing::debug!("KONA: Determining blob gas fields based on Ecotone activation");
         let (blob_gas_used, excess_blob_gas) = if self.config.is_ecotone_active(timestamp) {
+            tracing::debug!("KONA: Ecotone active, setting blob gas fields to 0");
             (Some(0), Some(0))
         } else {
+            tracing::debug!("KONA: Pre-Ecotone, no blob gas fields");
             Default::default()
         };
+        tracing::debug!("KONA: Blob gas used: {:?}, Excess blob gas: {:?}", blob_gas_used, excess_blob_gas);
 
         // At holocene activation, the base fee parameters from the payload are placed
         // into the Header's `extra_data` field.
         //
         // If the payload's `eip_1559_params` are equal to `0`, then the header's `extraData`
         // field is set to the encoded canyon base fee parameters.
+        tracing::debug!("KONA: Encoding base fee parameters based on hardfork activation");
         let encoded_base_fee_params = match self.config {
             config if config.is_jovian_active(timestamp) => {
+                tracing::debug!("KONA: Jovian active, encoding Jovian EIP-1559 params");
                 let extra_data = encode_jovian_eip_1559_params(self.config, attrs)?;
+                tracing::debug!("KONA: Encoded Jovian params length: {}", extra_data.len());
                 Ok(extra_data)
             }
             config if config.is_holocene_active(timestamp) => {
-                encode_holocene_eip_1559_params(self.config, attrs)
+                tracing::debug!("KONA: Holocene active, encoding Holocene EIP-1559 params");
+                let result = encode_holocene_eip_1559_params(self.config, attrs);
+                if let Ok(ref data) = result {
+                    tracing::debug!("KONA: Encoded Holocene params length: {}", data.len());
+                }
+                result
             }
-            _ => Ok(Default::default()),
+            _ => {
+                tracing::debug!("KONA: Pre-Holocene, using default empty extra data");
+                Ok(Default::default())
+            },
         }?;
+        tracing::debug!("KONA: Final base fee params length: {}", encoded_base_fee_params.len());
 
         // The requests hash on the OP Stack, if Isthmus is active, is always the empty SHA256 hash.
+        tracing::debug!("KONA: Determining requests hash based on Isthmus activation");
         let requests_hash = self.config.is_isthmus_active(timestamp).then_some(EMPTY_REQUESTS_HASH);
+        tracing::debug!("KONA: Requests hash: {:?}", requests_hash);
 
         // Construct the new header.
+        tracing::debug!("KONA: Constructing block header with computed values");
+        tracing::debug!("KONA: Header beneficiary: {:?}", attrs.payload_attributes.suggested_fee_recipient);
+        tracing::debug!("KONA: Header gas limit: {:?}", attrs.gas_limit);
+        tracing::debug!("KONA: Header base fee: {}", block_env.basefee);
+        tracing::debug!("KONA: Header prev_randao: {:?}", attrs.payload_attributes.prev_randao);
+        tracing::debug!("KONA: Header parent_beacon_block_root: {:?}", attrs.payload_attributes.parent_beacon_block_root);
+
         let header = Header {
             parent_hash,
             ommers_hash: EMPTY_OMMER_ROOT_HASH,
@@ -107,10 +159,14 @@ where
             excess_blob_gas: excess_blob_gas.and_then(|x| x.try_into().ok()),
             parent_beacon_block_root: attrs.payload_attributes.parent_beacon_block_root,
             extra_data: encoded_base_fee_params,
-        }
-        .seal_slow();
+        };
 
-        Ok(header)
+        tracing::debug!("KONA: Sealing header (computing hash)");
+        let sealed_header = header.seal_slow();
+        tracing::debug!("KONA: Header sealed with hash: {:?}", sealed_header.hash());
+        tracing::debug!("KONA: Successfully completed seal_block operation");
+
+        Ok(sealed_header)
     }
 
     /// Computes the current output root of the latest executed block, based on the parent header

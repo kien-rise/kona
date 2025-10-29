@@ -87,10 +87,50 @@ where
         &mut self,
         attributes: OpPayloadAttributes,
     ) -> Result<BlockBuildingOutcome, Self::Error> {
-        self.inner.as_mut().map_or_else(
-            || Err(kona_executor::ExecutorError::MissingExecutor),
-            |e| e.build_block(attributes),
-        )
+        tracing::debug!("KONA: Starting execute_payload operation");
+        tracing::debug!("KONA: Payload attributes - timestamp: {}, gas_limit: {:?}", 
+            attributes.payload_attributes.timestamp, attributes.gas_limit);
+        tracing::debug!("KONA: Payload attributes - eip_1559_params: {:?}", attributes.eip_1559_params);
+        tracing::debug!("KONA: Payload attributes - suggested_fee_recipient: {:?}", 
+            attributes.payload_attributes.suggested_fee_recipient);
+        
+        if let Some(ref txs) = attributes.transactions {
+            tracing::debug!("KONA: Payload contains {} transactions", txs.len());
+        } else {
+            tracing::debug!("KONA: Payload contains no transactions");
+        }
+
+        // Step 1: Check if executor is available
+        tracing::debug!("KONA: Checking if inner executor is available");
+        let executor = match self.inner.as_mut() {
+            Some(executor) => {
+                tracing::debug!("KONA: Inner executor found, proceeding with block building");
+                executor
+            }
+            None => {
+                tracing::error!("KONA: Inner executor is missing, cannot execute payload");
+                return Err(kona_executor::ExecutorError::MissingExecutor);
+            }
+        };
+
+        // Step 2: Execute block building
+        tracing::debug!("KONA: Calling build_block on inner executor");
+        let result = executor.build_block(attributes);
+        
+        match &result {
+            Ok(outcome) => {
+                tracing::debug!("KONA: Block building succeeded - block number: {}, gas used: {}", 
+                    outcome.header.number, outcome.execution_result.gas_used);
+                tracing::debug!("KONA: Block hash: {:?}", outcome.header.hash());
+                tracing::debug!("KONA: State root: {:?}", outcome.header.state_root);
+                tracing::debug!("KONA: Successfully completed execute_payload operation");
+            }
+            Err(e) => {
+                tracing::error!("KONA: Block building failed: {:?}", e);
+            }
+        }
+
+        result
     }
 
     /// Computes the output root.
