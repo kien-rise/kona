@@ -114,7 +114,7 @@ impl ChainConfig {
     pub fn base_fee_params(&self) -> BaseFeeParams {
         self.optimism
             .as_ref()
-            .map(|op| op.as_base_fee_params())
+            .map(|op| op.pre_canyon_params())
             .unwrap_or_else(|| base_fee_params(self.chain_id))
     }
 
@@ -122,7 +122,7 @@ impl ChainConfig {
     pub fn canyon_base_fee_params(&self) -> BaseFeeParams {
         self.optimism
             .as_ref()
-            .map(|op| op.as_canyon_base_fee_params())
+            .map(|op| op.post_canyon_params())
             .unwrap_or_else(|| base_fee_params_canyon(self.chain_id))
     }
 
