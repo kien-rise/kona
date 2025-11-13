@@ -2,12 +2,14 @@
 
 use super::{SingleChainHintHandler, SingleChainLocalInputs};
 use crate::{
-    DiskKeyValueStore, MemoryKeyValueStore, OfflineHostBackend, OnlineHostBackend,
-    OnlineHostBackendCfg, PreimageServer, SharedKeyValueStore, SplitKeyValueStore,
-    eth::http_provider, server::PreimageServerError,
+    eth::http_provider, server::PreimageServerError, DiskKeyValueStore, MemoryKeyValueStore,
+    OfflineHostBackend, OnlineHostBackend, OnlineHostBackendCfg, PreimageServer,
+    SharedKeyValueStore, SplitKeyValueStore,
 };
 use alloy_primitives::B256;
 use alloy_provider::RootProvider;
+use alloy_rpc_client::ClientBuilder;
+use alloy_transport::layers::ThrottleLayer;
 use clap::Parser;
 use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
@@ -18,6 +20,7 @@ use kona_proof::HintType;
 use kona_providers_alloy::{OnlineBeaconClient, OnlineBlobProvider};
 use kona_std_fpvm::{FileChannel, FileDescriptor};
 use op_alloy_network::Optimism;
+use reqwest::Url;
 use serde::Serialize;
 use std::{path::PathBuf, sync::Arc};
 use tokio::{
@@ -62,6 +65,9 @@ pub struct SingleChainHost {
         env
     )]
     pub l1_node_address: Option<String>,
+    /// Maximum number of requests per second to send to the L1 RPC endpoint (rate limiting)
+    #[arg(long, env)]
+    pub l1_requests_per_second: Option<u32>,
     /// Address of the L1 Beacon API endpoint to use.
     #[arg(
         long,
@@ -271,11 +277,18 @@ impl SingleChainHost {
 
     /// Creates the providers required for the host backend.
     pub async fn create_providers(&self) -> Result<SingleChainProviders, SingleChainHostError> {
-        let l1_provider = http_provider(
-            self.l1_node_address
-                .as_ref()
-                .ok_or(SingleChainHostError::Other("Provider must be set"))?,
-        );
+        let l1_rpc_url = self
+            .l1_node_address
+            .as_ref()
+            .ok_or(SingleChainHostError::Other("L1 node address must be set"))?
+            .parse::<Url>()
+            .map_err(|e| std::io::Error::other(e))?;
+        let l1_client = if let Some(rps) = self.l1_requests_per_second {
+            ClientBuilder::default().layer(ThrottleLayer::new(rps)).http(l1_rpc_url)
+        } else {
+            ClientBuilder::default().http(l1_rpc_url)
+        };
+        let l1_provider = RootProvider::new(l1_client);
         let blob_provider = OnlineBlobProvider::init(OnlineBeaconClient::new_http(
             self.l1_beacon_address
                 .clone()
