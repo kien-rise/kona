@@ -9,7 +9,7 @@ use crate::{
 use alloy_primitives::B256;
 use alloy_provider::RootProvider;
 use alloy_rpc_client::ClientBuilder;
-use alloy_transport::layers::ThrottleLayer;
+use alloy_transport::layers::{RetryBackoffLayer, ThrottleLayer};
 use clap::Parser;
 use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
@@ -68,6 +68,9 @@ pub struct SingleChainHost {
     /// Maximum number of requests per second to send to the L1 RPC endpoint (rate limiting)
     #[arg(long, env)]
     pub l1_requests_per_second: Option<u32>,
+    /// Maximum number of retry attempts for failed L1 RPC requests with exponential backoff
+    #[arg(long, requires = "l1_requests_per_second", env)]
+    pub l1_max_retries: Option<u32>,
     /// Address of the L1 Beacon API endpoint to use.
     #[arg(
         long,
@@ -283,7 +286,18 @@ impl SingleChainHost {
             .ok_or(SingleChainHostError::Other("L1 node address must be set"))?
             .parse::<Url>()
             .map_err(|e| std::io::Error::other(e))?;
-        let l1_client = if let Some(rps) = self.l1_requests_per_second {
+        let l1_client = if let Some(max_retries) = self.l1_max_retries {
+            let requests_per_second = self.l1_requests_per_second.unwrap();
+            let initial_backoff_ms = {
+                let base = 1000u64 / requests_per_second as u64;
+                let scalar = (max_retries.ilog2() + 1) as u64;
+                base * scalar
+            };
+            let middleware =
+                RetryBackoffLayer::new(max_retries, initial_backoff_ms, requests_per_second as u64)
+                    .with_avg_unit_cost(1);
+            ClientBuilder::default().layer(middleware).http(l1_rpc_url)
+        } else if let Some(rps) = self.l1_requests_per_second {
             ClientBuilder::default().layer(ThrottleLayer::new(rps)).http(l1_rpc_url)
         } else {
             ClientBuilder::default().http(l1_rpc_url)
