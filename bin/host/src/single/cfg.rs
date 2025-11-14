@@ -2,9 +2,10 @@
 
 use super::{SingleChainHintHandler, SingleChainLocalInputs};
 use crate::{
+    eth::{http_provider, rpc_client},
+    server::PreimageServerError,
     DiskKeyValueStore, MemoryKeyValueStore, OfflineHostBackend, OnlineHostBackend,
     OnlineHostBackendCfg, PreimageServer, SharedKeyValueStore, SplitKeyValueStore,
-    eth::http_provider, server::PreimageServerError,
 };
 use alloy_primitives::B256;
 use alloy_provider::RootProvider;
@@ -62,6 +63,12 @@ pub struct SingleChainHost {
         env
     )]
     pub l1_node_address: Option<String>,
+    /// Maximum number of requests per second to send to the L1 RPC endpoint (rate limiting)
+    #[arg(long, env)]
+    pub l1_requests_per_second: Option<u32>,
+    /// Maximum number of retry attempts for failed L1 RPC requests with exponential backoff
+    #[arg(long, requires = "l1_requests_per_second", env)]
+    pub l1_max_retries: Option<u32>,
     /// Address of the L1 Beacon API endpoint to use.
     #[arg(
         long,
@@ -271,11 +278,13 @@ impl SingleChainHost {
 
     /// Creates the providers required for the host backend.
     pub async fn create_providers(&self) -> Result<SingleChainProviders, SingleChainHostError> {
-        let l1_provider = http_provider(
+        let l1_provider = RootProvider::new(rpc_client(
             self.l1_node_address
-                .as_ref()
+                .as_deref()
                 .ok_or(SingleChainHostError::Other("Provider must be set"))?,
-        );
+            self.l1_requests_per_second,
+            self.l1_max_retries,
+        )?);
         let blob_provider = OnlineBlobProvider::init(OnlineBeaconClient::new_http(
             self.l1_beacon_address
                 .clone()
