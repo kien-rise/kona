@@ -3,7 +3,7 @@
 use crate::{DriverError, DriverPipeline, DriverResult, Executor, PipelineCursor, TipCursor};
 use alloc::{sync::Arc, vec::Vec};
 use alloy_consensus::BlockBody;
-use alloy_primitives::{B256, Bytes};
+use alloy_primitives::{Bytes, B256};
 use alloy_rlp::Decodable;
 use core::fmt::Debug;
 use kona_derive::{Pipeline, PipelineError, PipelineErrorKind, Signal, SignalReceiver};
@@ -158,7 +158,7 @@ where
     /// - **Reset**: Reorg detected, pipeline reset and derivation continues
     /// - **Other Critical**: Fatal pipeline errors that stop derivation
     ///
-    /// ## Execution Errors  
+    /// ## Execution Errors
     /// - **Pre-Holocene**: Block execution failures cause block to be discarded
     /// - **Holocene+**: Failed blocks are retried as deposit-only blocks
     ///   - Strips non-deposit transactions and flushes invalidated channel
@@ -199,7 +199,7 @@ where
     ///     .advance_to_target(&rollup_config, Some(100))
     ///     .await?;
     ///
-    /// // Derive until data exhausted  
+    /// // Derive until data exhausted
     /// let (final_head, output_root) = driver
     ///     .advance_to_target(&rollup_config, None)
     ///     .await?;
@@ -219,9 +219,21 @@ where
             // Check if we have reached the target block number.
             let pipeline_cursor = self.cursor.read();
             let tip_cursor = pipeline_cursor.tip();
+            info!(
+                "RISE: {}:{}: Current tip_cursor: block_number={}, block_hash={:?}, output_root={:?}",
+                file!(),
+                line!(),
+                tip_cursor.l2_safe_head.block_info.number,
+                tip_cursor.l2_safe_head.block_info.hash,
+                tip_cursor.l2_safe_head_output_root
+            );
             if let Some(tb) = target {
                 if tip_cursor.l2_safe_head.block_info.number >= tb {
-                    info!(target: "client", "Derivation complete, reached L2 safe head.");
+                    info!(
+                        "RISE: {}:{}: Derivation complete, reached L2 safe head.",
+                        file!(),
+                        line!()
+                    );
                     return Ok((tip_cursor.l2_safe_head, tip_cursor.l2_safe_head_output_root));
                 }
             }
@@ -230,7 +242,7 @@ where
             {
                 Ok(attrs) => attrs.take_inner(),
                 Err(PipelineErrorKind::Critical(PipelineError::EndOfSource)) => {
-                    warn!(target: "client", "Exhausted data source; Halting derivation and using current safe head.");
+                    warn!("RISE: {}:{}: Exhausted data source; Halting derivation and using current safe head.", file!(), line!());
 
                     // Adjust the target block number to the current safe head, as no more blocks
                     // can be produced.
@@ -247,7 +259,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(target: "client", "Failed to produce payload: {:?}", e);
+                    error!("RISE: {}:{}: Failed to produce payload: {:?}", file!(), line!(), e);
                     return Err(DriverError::Pipeline(e));
                 }
             };
@@ -256,11 +268,15 @@ where
             let outcome = match self.executor.execute_payload(attributes.clone()).await {
                 Ok(outcome) => outcome,
                 Err(e) => {
-                    error!(target: "client", "Failed to execute L2 block: {}", e);
+                    error!("RISE: {}:{}: Failed to execute L2 block: {}", file!(), line!(), e);
 
                     if cfg.is_holocene_active(attributes.payload_attributes.timestamp) {
                         // Retry with a deposit-only block.
-                        warn!(target: "client", "Flushing current channel and retrying deposit only block");
+                        warn!(
+                            "RISE: {}:{}: Flushing current channel and retrying deposit only block",
+                            file!(),
+                            line!()
+                        );
 
                         // Flush the current batch and channel - if a block was replaced with a
                         // deposit-only block due to execution failure, the
@@ -280,10 +296,7 @@ where
                         match self.executor.execute_payload(attributes.clone()).await {
                             Ok(header) => header,
                             Err(e) => {
-                                error!(
-                                    target: "client",
-                                    "Critical - Failed to execute deposit-only block: {e}",
-                                );
+                                error!("RISE: {}:{}: Critical - Failed to execute deposit-only block: {e}", file!(), line!());
                                 return Err(DriverError::Executor(e));
                             }
                         }
@@ -316,13 +329,36 @@ where
                 &block,
                 &self.pipeline.rollup_config().genesis,
             )?;
-            let tip_cursor = TipCursor::new(
-                l2_info,
-                outcome.header.clone(),
-                self.executor.compute_output_root().map_err(DriverError::Executor)?,
+
+            info!(
+                "RISE: {}:{}: Computing output root for new tip_cursor: block_number={}, block_hash={:?}",
+                file!(),
+                line!(),
+                l2_info.block_info.number,
+                l2_info.block_info.hash
             );
 
+            let output_root = self.executor.compute_output_root().map_err(DriverError::Executor)?;
+
+            info!(
+                "RISE: {}:{}: Creating new tip_cursor: block_number={}, block_hash={:?}, output_root={:?}",
+                file!(),
+                line!(),
+                l2_info.block_info.number,
+                l2_info.block_info.hash,
+                output_root
+            );
+
+            let tip_cursor = TipCursor::new(l2_info, outcome.header.clone(), output_root);
+
             // Advance the derivation pipeline cursor
+            info!(
+                "RISE: {}:{}: Advancing pipeline cursor with origin: l1_block_number={}, l1_block_hash={:?}",
+                file!(),
+                line!(),
+                origin.number,
+                origin.hash
+            );
             drop(pipeline_cursor);
             self.cursor.write().advance(origin, tip_cursor);
 

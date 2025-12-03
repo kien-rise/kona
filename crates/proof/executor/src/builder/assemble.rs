@@ -127,10 +127,9 @@ where
         let parent_number = self.trie_db.parent_block_header().number;
 
         info!(
-            target: "block_builder",
             parent_state_root = ?self.trie_db.parent_block_header().state_root,
             parent_block_number = parent_number,
-            "Computing output root",
+            "RISE: Computing output root",
         );
 
         let storage_root = self.message_passer_account(parent_number)?;
@@ -142,10 +141,9 @@ where
                 .hash();
 
         info!(
-            target: "block_builder",
             parent_block_number = parent_number,
             output_root = ?output_root_hash,
-            "Computed output root",
+            "RISE: Computed output root",
         );
 
         // Hash the output and return
