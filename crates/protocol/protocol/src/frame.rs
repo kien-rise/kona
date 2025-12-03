@@ -50,11 +50,8 @@ pub const FRAME_OVERHEAD: usize = 200;
 /// network conditions and gas limits, this larger limit provides headroom
 /// for future growth as L1 gas limits and network conditions improve.
 ///
-/// The 1MB limit balances:
-/// - **Transmission efficiency**: Larger frames reduce overhead
-/// - **Network compatibility**: Must fit within reasonable L1 transaction sizes
-/// - **Memory constraints**: Avoid excessive memory usage during processing
-pub const MAX_FRAME_LEN: usize = 1_000_000;
+/// RISE: This value is currently set to 100MB to match op-node/rollup/derive/frame.go.
+pub const MAX_FRAME_LEN: usize = 100_000_000;
 
 /// A frame decoding error.
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq, Hash)]
