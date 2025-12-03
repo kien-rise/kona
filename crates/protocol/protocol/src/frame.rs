@@ -226,9 +226,15 @@ impl Frame {
     ///   together.
     pub fn parse_frames(encoded: &[u8]) -> Result<Vec<Self>, FrameParseError> {
         if encoded.is_empty() {
+            tracing::error!("RISE: No frames to parse: encoded data is empty");
             return Err(FrameParseError::NoFrames);
         }
         if encoded[0] != DERIVATION_VERSION_0 {
+            tracing::error!(
+                "RISE: Unsupported derivation version: expected {}, got {}",
+                DERIVATION_VERSION_0,
+                encoded[0]
+            );
             return Err(FrameParseError::UnsupportedVersion);
         }
 
@@ -236,16 +242,28 @@ impl Frame {
         let mut frames = Vec::new();
         let mut offset = 0;
         while offset < data.len() {
-            let (frame_length, frame) =
-                Self::decode(&data[offset..]).map_err(FrameParseError::FrameDecodingError)?;
+            let (frame_length, frame) = Self::decode(&data[offset..]).map_err(|e| {
+                tracing::error!(
+                    "RISE: Frame decoding error at offset {}: {:?}",
+                    offset,
+                    e
+                );
+                FrameParseError::FrameDecodingError(e)
+            })?;
             frames.push(frame);
             offset += frame_length;
         }
 
         if offset != data.len() {
+            tracing::error!(
+                "RISE: Frame data length mismatch: offset {} != data length {}",
+                offset,
+                data.len()
+            );
             return Err(FrameParseError::DataLengthMismatch);
         }
         if frames.is_empty() {
+            tracing::error!("No frames decoded: frames vector is empty after parsing");
             return Err(FrameParseError::NoFramesDecoded);
         }
 
