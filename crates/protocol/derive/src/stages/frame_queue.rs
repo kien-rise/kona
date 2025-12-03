@@ -115,17 +115,20 @@ where
         let data = match self.prev.next_data().await {
             Ok(data) => data,
             Err(e) => {
-                debug!(target: "frame_queue", "Failed to retrieve data: {:?}", e);
+                debug!("RISE: Failed to retrieve data: {:?}", e);
                 // SAFETY: Bubble up potential EOF error without wrapping.
                 return Err(e);
             }
         };
 
-        let Ok(frames) = Frame::parse_frames(&data.into()) else {
-            // There may be more frames in the queue for the
-            // pipeline to advance, so don't return an error here.
-            error!(target: "frame_queue", "Failed to parse frames from data.");
-            return Ok(());
+        let frames = match Frame::parse_frames(&data.into()) {
+            Ok(frames) => frames,
+            Err(e) => {
+                // There may be more frames in the queue for the
+                // pipeline to advance, so don't return an error here.
+                error!("RISE: Failed to parse frames from data: {:?}", e);
+                return Ok(());
+            }
         };
 
         // Optimistically extend the queue with the new frames.
@@ -168,7 +171,7 @@ where
 
         // If we did not add more frames but still have more data, retry this function.
         if self.queue.is_empty() {
-            trace!(target: "frame_queue", "Queue is empty after fetching data. Retrying next_frame.");
+            trace!("Queue is empty after fetching data. Retrying next_frame.");
             return Err(PipelineError::NotEnoughData.temp());
         }
 
