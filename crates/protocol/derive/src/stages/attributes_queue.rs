@@ -59,7 +59,21 @@ where
     /// Loads a [`SingleBatch`] from the [`AttributesProvider`] if needed.
     pub async fn load_batch(&mut self, parent: L2BlockInfo) -> PipelineResult<SingleBatch> {
         if self.batch.is_none() {
+            debug!(
+                target: "attributes_queue",
+                "Loading batch for parent L2 block #{} (timestamp: {}, hash: {:?})",
+                parent.block_info.number,
+                parent.block_info.timestamp,
+                parent.block_info.hash
+            );
             let batch = self.prev.next_batch(parent).await?;
+            debug!(
+                target: "attributes_queue",
+                "Loaded batch successfully: epoch #{}, timestamp: {}, tx_count: {}",
+                batch.epoch_num,
+                batch.timestamp,
+                batch.transactions.len()
+            );
             self.batch = Some(batch);
             self.is_last_in_span = self.prev.is_last_in_span();
         }

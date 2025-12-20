@@ -7,7 +7,7 @@ use alloy_primitives::{BlockHash, Bytes};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use kona_genesis::RollupConfig;
 use op_alloy_consensus::OpTxType;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Represents a single batch: a single encoded L2 block
 #[derive(Debug, Default, RlpDecodable, RlpEncodable, Clone, PartialEq, Eq)]
@@ -44,18 +44,50 @@ impl SingleBatch {
         inclusion_block: &BlockInfo,
     ) -> BatchValidity {
         let next_timestamp = l2_safe_head.block_info.timestamp + cfg.block_time;
+        let holocene_active = cfg.is_holocene_active(inclusion_block.timestamp);
+
+        debug!(
+            target: "single_batch",
+            "check_batch_timestamp: batch_ts={}, expected_ts={} (safe_head_ts={} + block_time={}), holocene_active={}",
+            self.timestamp,
+            next_timestamp,
+            l2_safe_head.block_info.timestamp,
+            cfg.block_time,
+            holocene_active
+        );
+
         if self.timestamp > next_timestamp {
-            if cfg.is_holocene_active(inclusion_block.timestamp) {
+            debug!(
+                target: "single_batch",
+                "Batch timestamp {} is in the future (expected {}), returning {}",
+                self.timestamp,
+                next_timestamp,
+                if holocene_active { "Drop" } else { "Future" }
+            );
+            if holocene_active {
                 return BatchValidity::Drop;
             }
             return BatchValidity::Future;
         }
         if self.timestamp < next_timestamp {
-            if cfg.is_holocene_active(inclusion_block.timestamp) {
+            debug!(
+                target: "single_batch",
+                "Batch timestamp {} is in the past (expected {}), returning {}",
+                self.timestamp,
+                next_timestamp,
+                if holocene_active { "Past" } else { "Drop" }
+            );
+            if holocene_active {
                 return BatchValidity::Past;
             }
             return BatchValidity::Drop;
         }
+        debug!(
+            target: "single_batch",
+            "Batch timestamp {} matches expected {}, returning Accept",
+            self.timestamp,
+            next_timestamp
+        );
         BatchValidity::Accept
     }
 
@@ -78,9 +110,30 @@ impl SingleBatch {
 
         let epoch = l1_blocks[0];
 
+        debug!(
+            target: "single_batch",
+            "check_batch: batch(epoch_num={}, epoch_hash={:?}, timestamp={}, parent_hash={:?}), l2_safe_head(num={}, ts={}, hash={:?}), epoch_L1(num={}, ts={}), inclusion_L1(num={}, ts={})",
+            self.epoch_num,
+            self.epoch_hash,
+            self.timestamp,
+            self.parent_hash,
+            l2_safe_head.block_info.number,
+            l2_safe_head.block_info.timestamp,
+            l2_safe_head.block_info.hash,
+            epoch.number,
+            epoch.timestamp,
+            inclusion_block.number,
+            inclusion_block.timestamp
+        );
+
         // If the batch is not accepted by the timestamp check, return the result.
         let timestamp_check = self.check_batch_timestamp(cfg, l2_safe_head, inclusion_block);
         if !timestamp_check.is_accept() {
+            debug!(
+                target: "single_batch",
+                "check_batch failed timestamp check, returning {:?}",
+                timestamp_check
+            );
             return timestamp_check;
         }
 

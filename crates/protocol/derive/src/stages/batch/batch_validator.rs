@@ -247,6 +247,16 @@ where
         };
         next_batch.parent_hash = parent.block_info.hash;
 
+        debug!(
+            target: "batch_validator",
+            "Checking batch validity: epoch #{}, timestamp: {}, parent L2 #{} (timestamp: {}), stage_origin L1 #{}",
+            next_batch.epoch_num,
+            next_batch.timestamp,
+            parent.block_info.number,
+            parent.block_info.timestamp,
+            stage_origin.number
+        );
+
         // Check the validity of the single batch before forwarding it.
         match next_batch.check_batch(
             self.cfg.as_ref(),
@@ -259,7 +269,14 @@ where
                 Ok(next_batch)
             }
             BatchValidity::Past => {
-                warn!(target: "batch_validator", "Dropping old batch");
+                warn!(
+                    target: "batch_validator",
+                    "Dropping old batch: batch timestamp {} < expected {} (parent {} + block_time {})",
+                    next_batch.timestamp,
+                    parent.block_info.timestamp + self.cfg.block_time,
+                    parent.block_info.timestamp,
+                    self.cfg.block_time
+                );
                 Err(PipelineError::NotEnoughData.temp())
             }
             BatchValidity::Drop => {
