@@ -173,12 +173,40 @@ impl HintHandler for SingleChainHintHandler {
 
                 // Fetch the raw header from the L2 chain provider.
                 let hash: B256 = hint.data.as_ref().try_into()?;
+
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    "Requesting debug_getRawHeader from L2 provider"
+                );
+
                 let raw_header: Bytes =
                     providers.l2.client().request("debug_getRawHeader", [hash]).await?;
 
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    raw_header = ?raw_header,
+                    "Received raw header from L2 provider"
+                );
+
                 // Acquire a lock on the key-value store and set the preimage.
                 let mut kv_lock = kv.write().await;
-                kv_lock.set(PreimageKey::new_keccak256(*hash).into(), raw_header.into())?;
+
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    preimage_key = ?PreimageKey::new_keccak256(*hash),
+                    "Setting header preimage in key-value store"
+                );
+
+                kv_lock.set(PreimageKey::new_keccak256(*hash).into(), raw_header.into())?; // here
+
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    "Successfully stored L2 block header preimage"
+                );
             }
             HintType::L2Transactions => {
                 ensure!(hint.data.len() == 32, "Invalid hint data length");
