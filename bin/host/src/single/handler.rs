@@ -1,23 +1,23 @@
 //! [HintHandler] for the [SingleChainHost].
 
 use crate::{
-    HintHandler, OnlineHostBackendCfg, backend::util::store_ordered_trie, kv::SharedKeyValueStore,
-    single::cfg::SingleChainHost,
+    backend::util::store_ordered_trie, kv::SharedKeyValueStore, single::cfg::SingleChainHost,
+    HintHandler, OnlineHostBackendCfg,
 };
 use alloy_consensus::Header;
 use alloy_eips::{
     eip2718::Encodable2718,
-    eip4844::{BlobTransactionSidecarItem, FIELD_ELEMENTS_PER_BLOB, IndexedBlobHash},
+    eip4844::{BlobTransactionSidecarItem, IndexedBlobHash, FIELD_ELEMENTS_PER_BLOB},
 };
-use alloy_primitives::{Address, B256, Bytes, keccak256};
+use alloy_primitives::{keccak256, Address, Bytes, B256};
 use alloy_provider::Provider;
 use alloy_rlp::Decodable;
-use alloy_rpc_types::{Block, debug::ExecutionWitness};
-use anyhow::{Result, anyhow, ensure};
+use alloy_rpc_types::{debug::ExecutionWitness, Block};
+use anyhow::{anyhow, ensure, Result};
 use ark_ff::{BigInteger, PrimeField};
 use async_trait::async_trait;
 use kona_preimage::{PreimageKey, PreimageKeyType};
-use kona_proof::{Hint, HintType, l1::ROOTS_OF_UNITY};
+use kona_proof::{l1::ROOTS_OF_UNITY, Hint, HintType};
 use kona_protocol::{BlockInfo, OutputRoot, Predeploys};
 use op_alloy_rpc_types_engine::OpPayloadAttributes;
 use tracing::warn;
@@ -173,12 +173,40 @@ impl HintHandler for SingleChainHintHandler {
 
                 // Fetch the raw header from the L2 chain provider.
                 let hash: B256 = hint.data.as_ref().try_into()?;
+
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    "Requesting debug_getRawHeader from L2 provider"
+                );
+
                 let raw_header: Bytes =
                     providers.l2.client().request("debug_getRawHeader", [hash]).await?;
 
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    raw_header = ?raw_header,
+                    "Received raw header from L2 provider"
+                );
+
                 // Acquire a lock on the key-value store and set the preimage.
                 let mut kv_lock = kv.write().await;
-                kv_lock.set(PreimageKey::new_keccak256(*hash).into(), raw_header.into())?;
+
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    preimage_key = ?PreimageKey::new_keccak256(*hash),
+                    "Setting header preimage in key-value store"
+                );
+
+                kv_lock.set(PreimageKey::new_keccak256(*hash).into(), raw_header.into())?; // here
+
+                tracing::debug!(
+                    target: "hint_handler",
+                    hash = ?hash,
+                    "Successfully stored L2 block header preimage"
+                );
             }
             HintType::L2Transactions => {
                 ensure!(hint.data.len() == 32, "Invalid hint data length");

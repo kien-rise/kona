@@ -1,10 +1,10 @@
 //! Contains the concrete implementation of the [L2ChainProvider] trait for the client program.
 
-use crate::{HintType, eip2935::eip_2935_history_lookup, errors::OracleProviderError};
+use crate::{eip2935::eip_2935_history_lookup, errors::OracleProviderError, HintType};
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use alloy_consensus::{BlockBody, Header};
 use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{Address, B256, Bytes};
+use alloy_primitives::{Address, Bytes, B256};
 use alloy_rlp::Decodable;
 use async_trait::async_trait;
 use kona_derive::L2ChainProvider;
@@ -13,7 +13,7 @@ use kona_executor::TrieDBProvider;
 use kona_genesis::{RollupConfig, SystemConfig};
 use kona_mpt::{OrderedListWalker, TrieHinter, TrieNode, TrieProvider};
 use kona_preimage::{CommsClient, PreimageKey, PreimageKeyType};
-use kona_protocol::{BatchValidationProvider, L2BlockInfo, to_system_config};
+use kona_protocol::{to_system_config, BatchValidationProvider, L2BlockInfo};
 use op_alloy_consensus::{OpBlock, OpTxEnvelope};
 use spin::RwLock;
 
@@ -61,26 +61,86 @@ impl<T: CommsClient> OracleL2ChainProvider<T> {
     /// Returns a [Header] corresponding to the given L2 block number, by walking back from the
     /// L2 safe head.
     async fn header_by_number(&mut self, block_number: u64) -> Result<Header, OracleProviderError> {
+        tracing::debug!(target: "oracle_l2_chain_provider", block_number = block_number, "Starting header_by_number");
+
         // Fetch the starting block header.
-        let mut header = self.header_by_hash(self.l2_safe_head().await?)?;
+        let l2_safe_head_hash = self.l2_safe_head().await?;
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = block_number,
+            l2_safe_head_hash = ?l2_safe_head_hash,
+            "Retrieved L2 safe head hash"
+        );
+
+        let mut header = self.header_by_hash(l2_safe_head_hash)?;
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = block_number,
+            safe_head_number = header.number,
+            safe_head_hash = ?l2_safe_head_hash,
+            "Fetched safe head header"
+        );
 
         // Check if the block number is in range. If not, we can fail early.
         if block_number > header.number {
+            tracing::error!(
+                target: "oracle_l2_chain_provider",
+                block_number = block_number,
+                safe_head_number = header.number,
+                "Block number is past the safe head"
+            );
             return Err(OracleProviderError::BlockNumberPastHead(block_number, header.number));
         }
 
         let mut linear_fallback = false;
+        let mut steps = 0;
         while header.number > block_number {
-            if self.rollup_config.is_isthmus_active(header.timestamp) && !linear_fallback {
+            steps += 1;
+            let is_isthmus_active = self.rollup_config.is_isthmus_active(header.timestamp);
+
+            tracing::debug!(
+                target: "oracle_l2_chain_provider",
+                block_number = block_number,
+                current_header_number = header.number,
+                current_header_hash = ?header.hash_slow(),
+                parent_hash = ?header.parent_hash,
+                is_isthmus_active = is_isthmus_active,
+                linear_fallback = linear_fallback,
+                steps = steps,
+                "Walking back to find block"
+            );
+
+            if is_isthmus_active && !linear_fallback {
                 // If Isthmus is active, the EIP-2935 contract is used to perform leaping lookbacks
                 // through consulting the ring buffer within the contract. If this
                 // lookup fails for any reason, we fall back to linear walk back.
+                tracing::debug!(
+                    target: "oracle_l2_chain_provider",
+                    block_number = block_number,
+                    current_header_number = header.number,
+                    "Attempting EIP-2935 history lookup"
+                );
+
                 let block_hash =
                     match eip_2935_history_lookup(&header, block_number, self, self).await {
-                        Ok(hash) => hash,
-                        Err(_) => {
+                        Ok(hash) => {
+                            tracing::debug!(
+                                target: "oracle_l2_chain_provider",
+                                block_number = block_number,
+                                found_hash = ?hash,
+                                "EIP-2935 lookup succeeded"
+                            );
+                            hash
+                        }
+                        Err(e) => {
                             // If the EIP-2935 lookup fails for any reason, attempt fallback to
                             // linear walk back.
+                            tracing::warn!(
+                                target: "oracle_l2_chain_provider",
+                                block_number = block_number,
+                                error = ?e,
+                                "EIP-2935 lookup failed, falling back to linear walk"
+                            );
                             linear_fallback = true;
                             continue;
                         }
@@ -89,9 +149,24 @@ impl<T: CommsClient> OracleL2ChainProvider<T> {
                 header = self.header_by_hash(block_hash)?;
             } else {
                 // Walk back the block headers one-by-one until the desired block number is reached.
+                tracing::debug!(
+                    target: "oracle_l2_chain_provider",
+                    block_number = block_number,
+                    current_header_number = header.number,
+                    parent_hash = ?header.parent_hash,
+                    "Walking back via parent hash"
+                );
                 header = self.header_by_hash(header.parent_hash)?;
             }
         }
+
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = block_number,
+            header_hash = ?header.hash_slow(),
+            total_steps = steps,
+            "Successfully found header by number"
+        );
 
         Ok(header)
     }
@@ -111,21 +186,62 @@ impl<T: CommsClient + Send + Sync> BatchValidationProvider for OracleL2ChainProv
     }
 
     async fn block_by_number(&mut self, number: u64) -> Result<OpBlock, Self::Error> {
+        // here
+        tracing::debug!(target: "oracle_l2_chain_provider", block_number = number, "Fetching block by number");
+
         // Fetch the header for the given block number.
         let header @ Header { transactions_root, timestamp, .. } =
             self.header_by_number(number).await?;
+
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            header = ?header,
+            "Retrieved header for block"
+        );
+
+        // Compute the header hash - this is critical for fetching transactions
         let header_hash = header.hash_slow();
 
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            header_hash = ?header_hash,
+            "Computed header hash using hash_slow()"
+        );
+
         // Fetch the transactions in the block.
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            header_hash = ?header_hash,
+            chain_id = ?self.chain_id,
+            "Sending L2Transactions hint to oracle"
+        );
+
         HintType::L2Transactions
             .with_data(&[header_hash.as_ref()])
             .with_data(self.chain_id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec()))
             .send(self.oracle.as_ref())
             .await?;
+
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            transactions_root = ?transactions_root,
+            "Creating trie walker for transactions"
+        );
+
         let trie_walker = OrderedListWalker::try_new_hydrated(transactions_root, self)
             .map_err(OracleProviderError::TrieWalker)?;
 
         // Decode the transactions within the transactions trie.
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            "Decoding transactions from trie"
+        );
+
         let transactions = trie_walker
             .into_iter()
             .map(|(_, rlp)| {
@@ -135,17 +251,39 @@ impl<T: CommsClient + Send + Sync> BatchValidationProvider for OracleL2ChainProv
             .collect::<Result<Vec<_>, _>>()
             .map_err(OracleProviderError::Rlp)?;
 
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            tx_count = transactions.len(),
+            "Successfully decoded transactions"
+        );
+
+        let is_canyon_active = self.rollup_config.is_canyon_active(timestamp);
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            timestamp = timestamp,
+            is_canyon_active = is_canyon_active,
+            "Checking Canyon activation for withdrawals"
+        );
+
         let optimism_block = OpBlock {
             header,
             body: BlockBody {
                 transactions,
                 ommers: Vec::new(),
-                withdrawals: self
-                    .rollup_config
-                    .is_canyon_active(timestamp)
+                withdrawals: is_canyon_active
                     .then(|| alloy_eips::eip4895::Withdrawals::new(Vec::new())),
             },
         };
+
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            block_number = number,
+            header_hash = ?header_hash,
+            "Successfully constructed OpBlock"
+        );
+
         Ok(optimism_block)
     }
 }
@@ -206,16 +344,56 @@ impl<T: CommsClient> TrieDBProvider for OracleL2ChainProvider<T> {
     }
 
     fn header_by_hash(&self, hash: B256) -> Result<Header, OracleProviderError> {
+        // here
+        tracing::debug!(
+            target: "oracle_l2_chain_provider",
+            hash = ?hash,
+            "Starting header_by_hash"
+        );
+
         // Fetch the header from the caching oracle.
         crate::block_on(async move {
+            tracing::debug!(
+                target: "oracle_l2_chain_provider",
+                hash = ?hash,
+                chain_id = ?self.chain_id,
+                "Sending L2BlockHeader hint to oracle"
+            );
+
             HintType::L2BlockHeader
                 .with_data(&[hash.as_slice()])
                 .with_data(self.chain_id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec()))
                 .send(self.oracle.as_ref())
                 .await?;
+
+            tracing::debug!(
+                target: "oracle_l2_chain_provider",
+                hash = ?hash,
+                "Fetching header bytes from oracle via preimage key"
+            );
+
             let header_bytes = self.oracle.get(PreimageKey::new_keccak256(*hash)).await?;
 
-            Header::decode(&mut header_bytes.as_slice()).map_err(OracleProviderError::Rlp)
+            tracing::debug!(
+                target: "oracle_l2_chain_provider",
+                hash = ?hash,
+                bytes_len = header_bytes.len(),
+                "Retrieved header bytes, decoding"
+            );
+
+            let header =
+                Header::decode(&mut header_bytes.as_slice()).map_err(OracleProviderError::Rlp)?;
+
+            tracing::debug!(
+                target: "oracle_l2_chain_provider",
+                hash = ?hash,
+                header_number = header.number,
+                parent_hash = ?header.parent_hash,
+                timestamp = header.timestamp,
+                "Successfully decoded header"
+            );
+
+            Ok(header)
         })
     }
 }
