@@ -83,6 +83,37 @@ where
         // Grab the next frame from the previous stage.
         let next_frame = self.prev.next_frame().await?;
 
+        // Log the received frame verbosely for debugging
+        debug!(
+            target: "channel_assembler",
+            "Received frame from previous stage:"
+        );
+        debug!(
+            target: "channel_assembler",
+            "  Channel ID: {}",
+            hex::encode(next_frame.id)
+        );
+        debug!(
+            target: "channel_assembler",
+            "  Frame number: {}",
+            next_frame.number
+        );
+        debug!(
+            target: "channel_assembler",
+            "  Frame data length: {} bytes",
+            next_frame.data.len()
+        );
+        debug!(
+            target: "channel_assembler",
+            "  Is last frame: {}",
+            next_frame.is_last
+        );
+        debug!(
+            target: "channel_assembler",
+            "  Frame data (hex): 0x{}",
+            hex::encode(&next_frame.data)
+        );
+
         // Start a new channel if the frame number is 0.
         if next_frame.number == 0 {
             info!(
