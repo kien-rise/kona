@@ -386,23 +386,61 @@ where
             tx_count,
         );
 
+        // Log raw encoded transactions before recovery
+        if let Some(encoded_transactions) = attrs.transactions.as_ref() {
+            debug!(
+                target: "block_builder",
+                "Raw encoded transactions present: {} transaction(s)",
+                encoded_transactions.len(),
+            );
+            for (idx, tx_bytes) in encoded_transactions.iter().enumerate() {
+                debug!(
+                    target: "block_builder",
+                    "- [{}] Raw bytes (length={}): {:?}",
+                    idx,
+                    tx_bytes.len(),
+                    tx_bytes,
+                );
+            }
+        } else {
+            debug!(
+                target: "block_builder",
+                "No encoded transactions in payload attributes",
+            );
+        }
+
+        // Recover transactions from encoded bytes
         let transactions = attrs
             .recovered_transactions_with_encoded()
             .collect::<Result<Vec<_>, RecoveryError>>()
             .map_err(ExecutorError::Recovery)?;
+
         debug!(
             target: "block_builder",
-            "Successfully recovered {} transactions, executing block...",
+            "Transaction recovery completed: {} transaction(s) recovered successfully",
             transactions.len(),
         );
 
-        // Log transaction details for debugging
-        for (idx, tx) in transactions.iter().enumerate() {
+        // Log recovered transaction details
+        for (idx, tx_with_encoded) in transactions.iter().enumerate() {
+            let tx = tx_with_encoded.tx();
+            let encoded = tx_with_encoded.encoded_bytes();
             debug!(
                 target: "block_builder",
-                "Transaction #{}: tx={:?}",
+                "  [{}] Recovered transaction: type={:?}, encoded_len={}",
                 idx,
-                tx.tx(),
+                tx.tx_type(),
+                encoded.len(),
+            );
+            debug!(
+                target: "block_builder",
+                "      Transaction envelope: {:?}",
+                tx,
+            );
+            debug!(
+                target: "block_builder",
+                "      Encoded bytes: {:?}",
+                encoded,
             );
         }
 
