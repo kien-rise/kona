@@ -8,7 +8,7 @@ use crate::{ExecutorError, ExecutorResult, TrieDB, TrieDBError, TrieDBProvider};
 use alloc::{string::ToString, vec::Vec};
 use alloy_consensus::{Header, Sealed, crypto::RecoveryError};
 use alloy_evm::{
-    EvmFactory, FromRecoveredTx, FromTxWithEncoded,
+    EvmFactory, FromRecoveredTx, FromTxWithEncoded, RecoveredTx,
     block::{BlockExecutionResult, BlockExecutor, BlockExecutorFactory},
 };
 use alloy_op_evm::{
@@ -213,30 +213,117 @@ where
         &mut self,
         attrs: OpPayloadAttributes,
     ) -> ExecutorResult<BlockBuildingOutcome> {
+        let parent_header = self.trie_db.parent_block_header();
+        debug!(
+            target: "block_builder",
+            "========== BUILD_BLOCK START ==========",
+        );
+        debug!(
+            target: "block_builder",
+            "Input attributes: timestamp={}, prev_randao={:?}, suggested_fee_recipient={:?}, withdrawals={}, parent_beacon_block_root={:?}",
+            attrs.payload_attributes.timestamp,
+            attrs.payload_attributes.prev_randao,
+            attrs.payload_attributes.suggested_fee_recipient,
+            attrs.payload_attributes.withdrawals.as_ref().map_or(0, |w| w.len()),
+            attrs.payload_attributes.parent_beacon_block_root,
+        );
+        debug!(
+            target: "block_builder",
+            "Input attributes (OP): transactions={}, no_tx_pool={:?}, gas_limit={:?}, eip_1559_params={:?}, min_base_fee={:?}",
+            attrs.transactions.as_ref().map_or(0, |txs| txs.len()),
+            attrs.no_tx_pool,
+            attrs.gas_limit,
+            attrs.eip_1559_params,
+            attrs.min_base_fee,
+        );
+        debug!(
+            target: "block_builder",
+            "Parent block: number={}, timestamp={}, hash={:?}, state_root={:?}, gas_used={}, gas_limit={}",
+            parent_header.number,
+            parent_header.timestamp,
+            parent_header.hash_slow(),
+            parent_header.state_root,
+            parent_header.gas_used,
+            parent_header.gas_limit,
+        );
+
         // Step 1. Set up the execution environment.
+        debug!(
+            target: "block_builder",
+            "Step 1: Setting up execution environment...",
+        );
         let (base_fee_params, min_base_fee) = Self::active_base_fee_params(
             self.config,
             self.trie_db.parent_block_header(),
             attrs.payload_attributes.timestamp,
         )?;
+        debug!(
+            target: "block_builder",
+            "Base fee params: elasticity_multiplier={}, max_change_denominator={}, min_base_fee={}",
+            base_fee_params.elasticity_multiplier,
+            base_fee_params.max_change_denominator,
+            min_base_fee,
+        );
+
+        let spec_id = self.config.spec_id(attrs.payload_attributes.timestamp);
+        debug!(
+            target: "block_builder",
+            "Spec ID for timestamp {}: {:?}",
+            attrs.payload_attributes.timestamp,
+            spec_id,
+        );
+
         let evm_env = self.evm_env(
-            self.config.spec_id(attrs.payload_attributes.timestamp),
+            spec_id,
             self.trie_db.parent_block_header(),
             &attrs,
             &base_fee_params,
             min_base_fee,
         )?;
         let block_env = evm_env.block_env().clone();
+        debug!(
+            target: "block_builder",
+            "Block environment: number={}, beneficiary={:?}, timestamp={}, gas_limit={}, basefee={}, difficulty={:?}, prevrandao={:?}",
+            block_env.number,
+            block_env.beneficiary,
+            block_env.timestamp,
+            block_env.gas_limit,
+            block_env.basefee,
+            block_env.difficulty,
+            block_env.prevrandao,
+        );
+
         let parent_hash = self.trie_db.parent_block_header().seal();
+        debug!(
+            target: "block_builder",
+            "Parent hash: {:?}",
+            parent_hash,
+        );
 
         // Attempt to send a payload witness hint to the host. This hint instructs the host to
         // populate its preimage store with the preimages required to statelessly execute
         // this payload. This feature is experimental, so if the hint fails, we continue
         // without it and fall back on on-demand preimage fetching for execution.
-        self.trie_db
-            .hinter
-            .hint_execution_witness(parent_hash, &attrs)
-            .map_err(|e| TrieDBError::Provider(e.to_string()))?;
+        debug!(
+            target: "block_builder",
+            "Step 1.5: Sending execution witness hint to host...",
+        );
+        match self.trie_db.hinter.hint_execution_witness(parent_hash, &attrs) {
+            Ok(_) => {
+                debug!(
+                    target: "block_builder",
+                    "Successfully sent execution witness hint",
+                );
+            }
+            Err(e) => {
+                debug!(
+                    target: "block_builder",
+                    "Failed to send execution witness hint (will fall back to on-demand): {}",
+                    e,
+                );
+                return Err(TrieDBError::Provider(e.to_string()).into());
+            }
+        }
 
         info!(
             target: "block_builder",
@@ -248,26 +335,104 @@ where
         );
 
         // Step 2. Create the executor, using the trie database.
+        debug!(
+            target: "block_builder",
+            "Step 2: Creating block executor with trie database...",
+        );
         let mut state = State::builder()
             .with_database(&mut self.trie_db)
             .with_bundle_update()
             .without_state_clear()
             .build();
+        debug!(
+            target: "block_builder",
+            "State builder configured: bundle_update=true, state_clear=false",
+        );
+
         let evm = self.factory.evm_factory().create_evm(&mut state, evm_env);
+        debug!(
+            target: "block_builder",
+            "EVM created with factory",
+        );
+
         let ctx = OpBlockExecutionCtx {
             parent_hash,
             parent_beacon_block_root: attrs.payload_attributes.parent_beacon_block_root,
             // This field is unused for individual block building jobs.
             extra_data: Default::default(),
         };
+        debug!(
+            target: "block_builder",
+            "Block execution context: parent_hash={:?}, parent_beacon_block_root={:?}",
+            ctx.parent_hash,
+            ctx.parent_beacon_block_root,
+        );
+
         let executor = self.factory.create_executor(evm, ctx);
+        debug!(
+            target: "block_builder",
+            "Block executor created successfully",
+        );
 
         // Step 3. Execute the block containing the transactions within the payload attributes.
+        debug!(
+            target: "block_builder",
+            "Step 3: Recovering and executing transactions...",
+        );
+        let tx_count = attrs.transactions.as_ref().map_or(0, |txs| txs.len());
+        debug!(
+            target: "block_builder",
+            "Recovering {} transactions from payload attributes...",
+            tx_count,
+        );
+
         let transactions = attrs
             .recovered_transactions_with_encoded()
             .collect::<Result<Vec<_>, RecoveryError>>()
             .map_err(ExecutorError::Recovery)?;
+        debug!(
+            target: "block_builder",
+            "Successfully recovered {} transactions, executing block...",
+            transactions.len(),
+        );
+
+        // Log transaction details for debugging
+        for (idx, tx) in transactions.iter().enumerate() {
+            debug!(
+                target: "block_builder",
+                "Transaction #{}: tx={:?}",
+                idx,
+                tx.tx(),
+            );
+        }
+
+        debug!(
+            target: "block_builder",
+            "Starting block execution with {} transactions...",
+            transactions.len(),
+        );
         let ex_result = executor.execute_block(transactions.iter())?;
+
+        debug!(
+            target: "block_builder",
+            "Block execution completed: gas_used={}, receipts_count={}, execution_result_gas={}, execution_result_receipts={}",
+            ex_result.gas_used,
+            ex_result.receipts.len(),
+            ex_result.gas_used,
+            ex_result.receipts.len(),
+        );
+
+        // Log receipt details
+        for (idx, receipt) in ex_result.receipts.iter().enumerate() {
+            debug!(
+                target: "block_builder",
+                "Receipt #{}: status={}, cumulative_gas_used={}, logs_count={}",
+                idx,
+                receipt.status(),
+                receipt.cumulative_gas_used(),
+                receipt.logs().len(),
+            );
+        }
 
         info!(
             target: "block_builder",
@@ -277,9 +442,27 @@ where
         );
 
         // Step 4. Merge state transitions and seal the block.
+        debug!(
+            target: "block_builder",
+            "Step 4: Merging state transitions and sealing block...",
+        );
         state.merge_transitions(BundleRetention::Reverts);
+        debug!(
+            target: "block_builder",
+            "State transitions merged with revert retention",
+        );
+
         let bundle = state.take_bundle();
+        debug!(
+            target: "block_builder",
+            "State bundle extracted, sealing block...",
+        );
+
         let header = self.seal_block(&attrs, parent_hash, &block_env, &ex_result, bundle)?;
+        debug!(
+            target: "block_builder",
+            "Block sealed successfully",
+        );
 
         info!(
             target: "block_builder",
@@ -291,8 +474,40 @@ where
             "Sealed new block",
         );
 
+        debug!(
+            target: "block_builder",
+            "Sealed block details: number={}, timestamp={}, hash={:?}, parent_hash={:?}, state_root={:?}, transactions_root={:?}, receipts_root={:?}, logs_bloom={:?}, gas_used={}, gas_limit={}, base_fee_per_gas={:?}, difficulty={:?}, nonce={}, extra_data_len={}",
+            header.number,
+            header.timestamp,
+            header.seal(),
+            header.parent_hash,
+            header.state_root,
+            header.transactions_root,
+            header.receipts_root,
+            header.logs_bloom,
+            header.gas_used,
+            header.gas_limit,
+            header.base_fee_per_gas,
+            header.difficulty,
+            header.nonce,
+            header.extra_data.len(),
+        );
+
         // Update the parent block hash in the state database, preparing for the next block.
+        debug!(
+            target: "block_builder",
+            "Step 5: Updating parent block header in trie_db for next block...",
+        );
         self.trie_db.set_parent_block_header(header.clone());
+        debug!(
+            target: "block_builder",
+            "Parent block header updated successfully",
+        );
+
+        debug!(
+            target: "block_builder",
+            "========== BUILD_BLOCK SUCCESS ==========",
+        );
         Ok((header, ex_result).into())
     }
 }
