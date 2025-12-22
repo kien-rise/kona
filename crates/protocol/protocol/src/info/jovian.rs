@@ -55,9 +55,8 @@ pub struct L1BlockInfoJovian {
 }
 
 impl L1BlockInfoJovian {
-    /// The default DA footprint gas scalar
-    /// <https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/jovian/l1-attributes.md#overview>
-    pub const DEFAULT_DA_FOOTPRINT_GAS_SCALAR: u16 = 400;
+    /// RISE: customized by us since https://github.com/risechain/rise-optimism/pull/749
+    pub const DEFAULT_DA_FOOTPRINT_GAS_SCALAR: u16 = 0;
 
     /// The type byte identifier for the L1 scalar format in Jovian.
     pub const L1_SCALAR: u8 = 2;
