@@ -4,7 +4,7 @@ use crate::{
     BatchStreamProvider, OriginAdvancer, OriginProvider, PipelineError, PipelineResult, Signal,
     SignalReceiver,
 };
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, string::ToString, sync::Arc};
 use alloy_primitives::Bytes;
 use async_trait::async_trait;
 use core::fmt::Debug;
@@ -153,6 +153,185 @@ where
                     crate::metrics::Metrics::PIPELINE_READ_BATCHES,
                     "type" => batch.to_string(),
                 );
+
+                // Log batch details verbosely for debugging critical issues
+                debug!(
+                    target: "channel_reader",
+                    "========== BATCH DECODED FROM CHANNEL =========="
+                );
+                debug!(
+                    target: "channel_reader",
+                    "Batch type: {}",
+                    batch.to_string()
+                );
+
+                match &batch {
+                    kona_protocol::Batch::Single(single_batch) => {
+                        debug!(
+                            target: "channel_reader",
+                            "SingleBatch details:"
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Parent hash: {:?}",
+                            single_batch.parent_hash
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Epoch number: {}",
+                            single_batch.epoch_num
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Epoch hash: {:?}",
+                            single_batch.epoch_hash
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Timestamp: {}",
+                            single_batch.timestamp
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Transaction count: {}",
+                            single_batch.transactions.len()
+                        );
+
+                        // Log each transaction in detail
+                        for (idx, tx_bytes) in single_batch.transactions.iter().enumerate() {
+                            debug!(
+                                target: "channel_reader",
+                                "  Transaction [{}]:",
+                                idx
+                            );
+                            debug!(
+                                target: "channel_reader",
+                                "    Length: {} bytes",
+                                tx_bytes.len()
+                            );
+                            debug!(
+                                target: "channel_reader",
+                                "    Raw bytes (hex): {:?}",
+                                tx_bytes
+                            );
+                            if tx_bytes.len() <= 256 {
+                                debug!(
+                                    target: "channel_reader",
+                                    "    Raw bytes (array): {:?}",
+                                    tx_bytes
+                                );
+                            } else {
+                                debug!(
+                                    target: "channel_reader",
+                                    "    Raw bytes (first 128): {:?}...",
+                                    &tx_bytes[..128]
+                                );
+                                debug!(
+                                    target: "channel_reader",
+                                    "    Raw bytes (last 128): ...{:?}",
+                                    &tx_bytes[tx_bytes.len() - 128..]
+                                );
+                            }
+
+                            // Try to decode and log transaction type if possible
+                            if !tx_bytes.is_empty() {
+                                let tx_type = tx_bytes[0];
+                                debug!(
+                                    target: "channel_reader",
+                                    "    First byte (tx type hint): 0x{:02x}",
+                                    tx_type
+                                );
+
+                                // Identify common transaction types
+                                let type_name = match tx_type {
+                                    0x00 => "Legacy or first byte of RLP",
+                                    0x01 => "EIP-2930 (Access List)",
+                                    0x02 => "EIP-1559 (Dynamic Fee)",
+                                    0x7E => "OP Stack Deposit",
+                                    0x7F => "OP Stack Upgrade Deposit (Fjord)",
+                                    _ if tx_type >= 0x80 => "RLP-encoded Legacy",
+                                    _ => "Unknown or Reserved",
+                                };
+                                debug!(
+                                    target: "channel_reader",
+                                    "    Probable type: {}",
+                                    type_name
+                                );
+                            }
+                        }
+                    }
+                    kona_protocol::Batch::Span(span_batch) => {
+                        debug!(
+                            target: "channel_reader",
+                            "SpanBatch details:"
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Parent check: {:?}",
+                            span_batch.parent_check
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  L1 origin check: {:?}",
+                            span_batch.l1_origin_check
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Block count: {}",
+                            span_batch.batches.len()
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Origin bits: {:?}",
+                            span_batch.origin_bits
+                        );
+                        debug!(
+                            target: "channel_reader",
+                            "  Block transaction counts: {:?}",
+                            span_batch.block_tx_counts
+                        );
+
+                        // Log total transactions across all batches
+                        let total_txs: usize =
+                            span_batch.batches.iter().map(|b| b.transactions.len()).sum();
+                        debug!(
+                            target: "channel_reader",
+                            "  Total transactions: {}",
+                            total_txs
+                        );
+
+                        // Log each batch in the span
+                        for (batch_idx, batch) in span_batch.batches.iter().enumerate() {
+                            debug!(
+                                target: "channel_reader",
+                                "  Batch [{}] in span:",
+                                batch_idx
+                            );
+                            debug!(
+                                target: "channel_reader",
+                                "    Transactions: {}",
+                                batch.transactions.len()
+                            );
+
+                            for (tx_idx, tx_bytes) in batch.transactions.iter().enumerate() {
+                                debug!(
+                                    target: "channel_reader",
+                                    "    Transaction [{}/{}]: {} bytes, data: {:?}",
+                                    batch_idx,
+                                    tx_idx,
+                                    tx_bytes.len(),
+                                    tx_bytes
+                                );
+                            }
+                        }
+                    }
+                }
+
+                debug!(
+                    target: "channel_reader",
+                    "================================================"
+                );
+
                 Ok(batch)
             }
             Err(e) => {
