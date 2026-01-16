@@ -7,7 +7,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use kona_cli::{LogArgs, LogConfig, cli_styles};
-use serde::Serialize;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -20,7 +19,7 @@ primary thread.
 ";
 
 /// The host binary CLI application arguments.
-#[derive(Parser, Serialize, Clone, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[command(about = ABOUT, version, styles = cli_styles())]
 pub struct HostCli {
     /// Logging arguments.
@@ -32,7 +31,7 @@ pub struct HostCli {
 }
 
 /// Operation modes for the host binary.
-#[derive(Subcommand, Serialize, Clone, Debug)]
+#[derive(Subcommand, Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum HostMode {
     /// Run the host in single-chain mode.

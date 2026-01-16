@@ -9,6 +9,7 @@ use crate::{
 use alloy_primitives::B256;
 use alloy_provider::RootProvider;
 use alloy_rpc_client::RpcClient;
+use anyhow::Context;
 use clap::Parser;
 use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
@@ -19,15 +20,26 @@ use kona_proof::HintType;
 use kona_providers_alloy::{OnlineBeaconClient, OnlineBlobProvider};
 use kona_std_fpvm::{FileChannel, FileDescriptor};
 use op_alloy_network::Optimism;
-use serde::Serialize;
+use reqwest::Url;
 use std::{path::PathBuf, sync::Arc};
 use tokio::{
     sync::RwLock,
     task::{self, JoinHandle},
 };
 
+fn parse_rpc_client(s: &str) -> anyhow::Result<RpcClient> {
+    let url = Url::parse(s).with_context(|| format!("failed to parse url: {:?}", s))?;
+    if url.scheme() == "http" || url.scheme() == "https" {
+        Ok(RpcClient::builder().http(url))
+    } else {
+        Ok(tokio::runtime::Handle::current()
+            .block_on(async { RpcClient::builder().connect(s).await })
+            .with_context(|| format!("failed to connect to RPC: {:?}", s))?)
+    }
+}
+
 /// The host binary CLI application arguments.
-#[derive(Default, Parser, Serialize, Clone, Debug)]
+#[derive(Default, Parser, Clone, Debug)]
 #[command(styles = cli_styles())]
 pub struct SingleChainHost {
     /// Hash of the L1 head block. Derivation stops after this block is processed.
@@ -49,43 +61,33 @@ pub struct SingleChainHost {
     #[arg(
         long,
         visible_alias = "l2",
-        requires = "l1_node_address",
+        alias = "l2_node_address",
+        requires = "l1_rpc",
         requires = "l1_beacon_address",
-        env
+        value_parser = parse_rpc_client,
+        env = "L2_NODE_ADDRESS"
     )]
-    pub l2_node_address: Option<String>,
+    pub l2_rpc: Option<RpcClient>,
     /// Address of L1 JSON-RPC endpoint to use (eth and debug namespace required)
     #[arg(
         long,
         visible_alias = "l1",
-        requires = "l2_node_address",
+        alias = "l1_node_address",
+        requires = "l2_rpc",
         requires = "l1_beacon_address",
-        env
+        value_parser = parse_rpc_client,
+        env = "L1_NODE_ADDRESS"
     )]
-    pub l1_node_address: Option<String>,
-    /// Pre-configured L1 RPC client (not settable via CLI, used internally)
-    #[serde(skip)]
-    #[arg(skip)]
-    pub l1_rpc_client: Option<RpcClient>,
-    /// Pre-configured L2 RPC client (not settable via CLI, used internally)
-    #[serde(skip)]
-    #[arg(skip)]
-    pub l2_rpc_client: Option<RpcClient>,
+    pub l1_rpc: Option<RpcClient>,
     /// Address of the L1 Beacon API endpoint to use.
-    #[arg(
-        long,
-        visible_alias = "beacon",
-        requires = "l1_node_address",
-        requires = "l2_node_address",
-        env
-    )]
+    #[arg(long, visible_alias = "beacon", requires = "l1_rpc", requires = "l2_rpc", env)]
     pub l1_beacon_address: Option<String>,
     /// The Data Directory for preimage data storage. Optional if running in online mode,
     /// required if running in offline mode.
     #[arg(
         long,
         visible_alias = "db",
-        required_unless_present_all = ["l2_node_address", "l1_node_address", "l1_beacon_address"],
+        required_unless_present_all = ["l2_rpc", "l1_rpc", "l1_beacon_address"],
         env
     )]
     pub data_dir: Option<PathBuf>,
@@ -232,8 +234,8 @@ impl SingleChainHost {
 
     /// Returns `true` if the host is running in offline mode.
     pub const fn is_offline(&self) -> bool {
-        self.l1_node_address.is_none() &&
-            self.l2_node_address.is_none() &&
+        self.l1_rpc.is_none() &&
+            self.l2_rpc.is_none() &&
             self.l1_beacon_address.is_none() &&
             self.data_dir.is_some()
     }
@@ -280,36 +282,19 @@ impl SingleChainHost {
 
     /// Creates the providers required for the host backend.
     pub async fn create_providers(&self) -> Result<SingleChainProviders, SingleChainHostError> {
-        let l1_rpc_client = if let Some(client) = &self.l1_rpc_client {
-            client.clone()
-        } else if let Some(url) = &self.l1_node_address {
-            RpcClient::builder()
-                .connect(url)
-                .await
-                .map_err(|_| SingleChainHostError::Other("Failed to connect to L1 RPC endpoint"))?
-        } else {
-            return Err(SingleChainHostError::Other("L1 node address must be set"))
+        let l1 = match &self.l1_rpc {
+            Some(rpc_client) => RootProvider::new(rpc_client.clone()),
+            None => return Err(SingleChainHostError::Other("L1 RPC must be set")),
         };
-        let l1_provider = RootProvider::new(l1_rpc_client);
-        let blob_provider = OnlineBlobProvider::init(OnlineBeaconClient::new_http(
-            self.l1_beacon_address
-                .clone()
-                .ok_or(SingleChainHostError::Other("Beacon API URL must be set"))?,
-        ))
-        .await;
-        let l2_rpc_client = if let Some(client) = &self.l2_rpc_client {
-            client.clone()
-        } else if let Some(url) = &self.l2_node_address {
-            RpcClient::builder()
-                .connect(url)
-                .await
-                .map_err(|_| SingleChainHostError::Other("Failed to connect to L2 RPC endpoint"))?
-        } else {
-            return Err(SingleChainHostError::Other("L2 node address must be set"))
+        let blobs = match &self.l1_beacon_address {
+            Some(url) => OnlineBlobProvider::init(OnlineBeaconClient::new_http(url.clone())).await,
+            None => return Err(SingleChainHostError::Other("Beacon API URL must be set")),
         };
-        let l2_provider = RootProvider::new(l2_rpc_client);
-
-        Ok(SingleChainProviders { l1: l1_provider, blobs: blob_provider, l2: l2_provider })
+        let l2 = match &self.l2_rpc {
+            Some(rpc_client) => RootProvider::new(rpc_client.clone()),
+            None => return Err(SingleChainHostError::Other("L2 RPC must be set")),
+        };
+        Ok(SingleChainProviders { l1, blobs, l2 })
     }
 }
 
