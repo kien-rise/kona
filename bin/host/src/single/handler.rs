@@ -345,16 +345,25 @@ impl HintHandler for SingleChainHintHandler {
 
                 ensure!(hint.data.len() >= 32, "Invalid hint data length");
 
+                #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct RisePayloadAttributes {
+                    current: OpPayloadAttributes,
+                    next: Option<OpPayloadAttributes>,
+                }
+
                 let parent_block_hash = B256::from_slice(&hint.data.as_ref()[..32]);
-                let payload_attributes: OpPayloadAttributes =
-                    serde_json::from_slice(&hint.data[32..])?;
+                let rise_payload_attributes = RisePayloadAttributes {
+                    current: serde_json::from_slice(&hint.data[32..])?,
+                    next: None,
+                };
 
                 let Ok(execute_payload_response) = providers
                     .l2
                     .client()
-                    .request::<(B256, OpPayloadAttributes), ExecutionWitness>(
+                    .request::<(B256, RisePayloadAttributes), ExecutionWitness>(
                         "debug_executePayload",
-                        (parent_block_hash, payload_attributes),
+                        (parent_block_hash, rise_payload_attributes),
                     )
                     .await
                 else {
