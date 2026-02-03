@@ -346,6 +346,7 @@ where
             nonce: trie_account.nonce,
             code_hash: trie_account.code_hash,
             code: None,
+            account_id: None,
         }))
     }
 

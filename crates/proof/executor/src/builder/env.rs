@@ -53,7 +53,7 @@ where
     pub(crate) fn evm_cfg_env(&self, timestamp: u64) -> CfgEnv<OpSpecId> {
         let mut cfg = CfgEnv::new()
             .with_chain_id(self.config.l2_chain_id.id())
-            .with_spec(self.config.spec_id(timestamp));
+            .with_spec_and_mainnet_gas_params(self.config.spec_id(timestamp));
 
         // https://github.com/risechain/rise/blob/adc3b88041a795ae4159fae7ffb3f442a257bc35/execution/crates/primitives/src/evm.rs#L15
         const RISE_MAX_CODE_SIZE: usize = 0x40000;

@@ -1,10 +1,10 @@
 //! An Engine API Client.
 
 use crate::{Metrics, RollupBoostServer, RollupBoostServerArgs, RollupBoostServerLike};
-use alloy_eips::{BlockId, eip1898::BlockNumberOrTag};
+use alloy_eips::{eip1898::BlockNumberOrTag, BlockId};
 use alloy_network::{Ethereum, Network};
-use alloy_primitives::{Address, B256, BlockHash, Bytes, StorageKey};
-use alloy_provider::{EthGetBlock, Provider, RootProvider, RpcWithBlock, ext::EngineApi};
+use alloy_primitives::{Address, BlockHash, Bytes, StorageKey, B256};
+use alloy_provider::{ext::EngineApi, EthGetBlock, Provider, RootProvider, RpcWithBlock};
 use alloy_rpc_client::RpcClient;
 use alloy_rpc_types_engine::{
     ClientVersionV1, ExecutionPayloadBodiesV1, ExecutionPayloadEnvelopeV2, ExecutionPayloadInputV2,
@@ -14,11 +14,11 @@ use alloy_rpc_types_engine::{
 use alloy_rpc_types_eth::{Block, EIP1186AccountProofResponse};
 use alloy_transport::{RpcError, TransportErrorKind, TransportResult};
 use alloy_transport_http::{
-    AuthLayer, AuthService, Http, HyperClient,
     hyper_util::{
-        client::legacy::{Client, connect::HttpConnector},
+        client::legacy::{connect::HttpConnector, Client},
         rt::TokioExecutor,
     },
+    AuthLayer, AuthService, Http, HyperClient,
 };
 use async_trait::async_trait;
 use http::uri::InvalidUri;
@@ -32,9 +32,8 @@ use op_alloy_rpc_types_engine::{
     OpExecutionPayloadEnvelopeV3, OpExecutionPayloadEnvelopeV4, OpExecutionPayloadV4,
     OpPayloadAttributes, ProtocolVersion,
 };
-use rollup_boost::{
-    Flashblocks, FlashblocksService, FlashblocksWebsocketConfig, Probes, RpcClientError,
-};
+use parking_lot::Mutex;
+use rollup_boost::{Flashblocks, FlashblocksWebsocketConfig, Probes, RpcClientError};
 use std::{
     future::Future,
     net::{AddrParseError, IpAddr, SocketAddr},
@@ -197,13 +196,13 @@ impl EngineClientBuilder {
             http::Uri::from_str(self.l2.to_string().as_str())?,
             self.l2_jwt,
             self.l2_timeout.as_millis() as u64,
-            rollup_boost::PayloadSource::L2,
+            rollup_boost_types::payload::PayloadSource::L2,
         )?;
         let builder_client = rollup_boost::RpcClient::new(
             http::Uri::from_str(self.builder.to_string().as_str())?,
             self.builder_jwt,
             self.builder_timeout.as_millis() as u64,
-            rollup_boost::PayloadSource::Builder,
+            rollup_boost_types::payload::PayloadSource::Builder,
         )?;
 
         let rollup_boost_server: Box<dyn RollupBoostServerLike + Send + Sync + 'static> =
@@ -227,6 +226,8 @@ impl EngineClientBuilder {
                                     .flashblock_builder_ws_initial_reconnect_ms,
                                 flashblock_builder_ws_max_reconnect_ms: ws_config
                                     .flashblock_builder_ws_max_reconnect_ms,
+                                flashblock_builder_ws_connect_timeout_ms: ws_config
+                                    .flashblock_builder_ws_connect_timeout_ms,
                                 flashblock_builder_ws_ping_interval_ms: ws_config
                                     .flashblock_builder_ws_ping_interval_ms,
                                 flashblock_builder_ws_pong_timeout_ms: ws_config
@@ -235,20 +236,20 @@ impl EngineClientBuilder {
                         )
                         .map_err(|e| EngineClientBuilderError::FlashblocksError(e.to_string()))?,
                     );
-                    Box::new(rollup_boost::RollupBoostServer::<FlashblocksService>::new(
+                    Box::new(rollup_boost::RollupBoostServer::new(
                         l2_client,
                         builder_client,
-                        self.rollup_boost.initial_execution_mode,
+                        Arc::new(Mutex::new(self.rollup_boost.initial_execution_mode)),
                         self.rollup_boost.block_selection_policy,
                         probes.clone(),
                         self.rollup_boost.external_state_root,
                         self.rollup_boost.ignore_unhealthy_builders,
                     ))
                 }
-                None => Box::new(rollup_boost::RollupBoostServer::<rollup_boost::RpcClient>::new(
+                None => Box::new(rollup_boost::RollupBoostServer::new(
                     l2_client,
                     Arc::new(builder_client),
-                    self.rollup_boost.initial_execution_mode,
+                    Arc::new(Mutex::new(self.rollup_boost.initial_execution_mode)),
                     self.rollup_boost.block_selection_policy,
                     probes.clone(),
                     self.rollup_boost.external_state_root,

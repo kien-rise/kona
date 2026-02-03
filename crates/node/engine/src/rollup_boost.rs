@@ -10,7 +10,7 @@ use op_alloy_rpc_types_engine::{
     OpExecutionPayloadEnvelopeV3, OpExecutionPayloadEnvelopeV4, OpExecutionPayloadV4,
     OpPayloadAttributes,
 };
-use rollup_boost::{EngineApiExt, EngineApiServer, ExecutionMode, Health, Probes};
+use rollup_boost::{EngineApiServer, ExecutionMode, Health, Probes};
 use std::{fmt::Debug, sync::Arc};
 
 use rollup_boost::BlockSelectionPolicy;
@@ -56,6 +56,9 @@ pub struct FlashblocksWebsocketConfig {
 
     /// Maximum time for exponential backoff for timeout if builder disconnected
     pub flashblock_builder_ws_max_reconnect_ms: u64,
+
+    /// Timeout for connection attempt
+    pub flashblock_builder_ws_connect_timeout_ms: u64,
 
     /// Interval in milliseconds between ping messages sent to upstream servers to detect
     /// unresponsive connections
@@ -133,9 +136,7 @@ pub trait RollupBoostServerLike: Debug + Send + Sync {
 }
 
 #[async_trait::async_trait]
-impl<T: EngineApiExt + Send + Sync + 'static + Debug> RollupBoostServerLike
-    for rollup_boost::RollupBoostServer<T>
-{
+impl RollupBoostServerLike for rollup_boost::RollupBoostServer {
     fn set_execution_mode(&self, execution_mode: ExecutionMode) {
         *self.execution_mode.lock() = execution_mode;
     }

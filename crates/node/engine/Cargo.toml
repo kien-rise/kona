@@ -45,6 +45,7 @@ async-trait.workspace = true
 thiserror.workspace = true
 url.workspace = true
 tower.workspace = true
+parking_lot.workspace = true
 http-body-util.workspace = true
 derive_more = { workspace = true, features = ["display", "deref", "from_str", "constructor"] }
 serde_json.workspace = true
@@ -55,6 +56,7 @@ metrics = { workspace = true, optional = true }
 
 # rollup boost
 rollup-boost.workspace = true
+rollup-boost-types.workspace = true
 http.workspace = true
 
 [dev-dependencies]
