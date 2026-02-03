@@ -208,16 +208,22 @@ impl HintHandler for SingleChainHintHandler {
                     .await?;
                 let header = Header::decode(&mut raw_header.as_ref())?;
 
-                // Fetch the storage root for the L2 head block.
-                let l2_to_l1_message_passer = providers
-                    .l2
-                    .get_proof(Predeploys::L2_TO_L1_MESSAGE_PASSER, Default::default())
-                    .block_id(cfg.agreed_l2_head_hash.into())
-                    .await?;
+                let l2_storage_root = if let Some(root) = header.withdrawals_root {
+                    // Post-Isthmus: Use the withdrawals_root from the header (fast)
+                    root
+                } else {
+                    // Pre-Isthmus: Fall back to eth_getProof (slow)
+                    providers
+                        .l2
+                        .get_proof(Predeploys::L2_TO_L1_MESSAGE_PASSER, Default::default())
+                        .block_id(cfg.agreed_l2_head_hash.into())
+                        .await?
+                        .storage_hash
+                };
 
                 let output_root = OutputRoot::from_parts(
                     header.state_root,
-                    l2_to_l1_message_passer.storage_hash,
+                    l2_storage_root,
                     cfg.agreed_l2_head_hash,
                 );
                 let output_root_hash = output_root.hash();
