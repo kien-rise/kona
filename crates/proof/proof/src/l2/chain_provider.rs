@@ -271,7 +271,7 @@ impl<T: CommsClient> TrieHinter for OracleL2ChainProvider<T> {
             let encoded_attributes =
                 serde_json::to_vec(op_payload_attributes).map_err(OracleProviderError::Serde)?;
 
-            HintType::L2PayloadWitness
+            HintType::L2PayloadWitness // then here, we pass the parent block number
                 .with_data(&[parent_hash.as_slice(), &encoded_attributes])
                 .with_data(self.chain_id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec()))
                 .send(self.oracle.as_ref())
