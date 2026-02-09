@@ -1,6 +1,7 @@
 //! Contains the implementations of the [HintRouter] and [PreimageFetcher] traits.
 
 use crate::kv::KeyValueStore;
+use alloy_primitives::Bytes;
 use async_trait::async_trait;
 use kona_preimage::{
     HintRouter, PreimageFetcher, PreimageKey,
@@ -44,7 +45,7 @@ impl<KV> HintRouter for OfflineHostBackend<KV>
 where
     KV: KeyValueStore + Send + Sync + ?Sized,
 {
-    async fn route_hint(&self, _hint: String) -> PreimageOracleResult<()> {
+    async fn route_hint(&self, _hint: Bytes) -> PreimageOracleResult<()> {
         Ok(())
     }
 }

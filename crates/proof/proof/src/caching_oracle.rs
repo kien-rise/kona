@@ -5,6 +5,7 @@
 //! [HintWriter]: kona_preimage::HintWriter
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloy_primitives::Bytes;
 use async_trait::async_trait;
 use core::num::NonZeroUsize;
 use kona_preimage::{
@@ -106,7 +107,7 @@ where
     OR: PreimageOracleClient + Sync,
     HW: HintWriterClient + Sync,
 {
-    async fn write(&self, hint: &str) -> PreimageOracleResult<()> {
+    async fn write(&self, hint: &Bytes) -> PreimageOracleResult<()> {
         self.hint_writer.write(hint).await
     }
 }

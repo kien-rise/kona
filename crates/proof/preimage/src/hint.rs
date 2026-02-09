@@ -1,9 +1,10 @@
 use crate::{
     Channel, HintReaderServer,
-    errors::{PreimageOracleError, PreimageOracleResult},
+    errors::PreimageOracleResult,
     traits::{HintRouter, HintWriterClient},
 };
-use alloc::{boxed::Box, format, string::String, vec};
+use alloc::{boxed::Box, vec};
+use alloy_primitives::Bytes;
 use async_trait::async_trait;
 
 /// A [HintWriter] is a high-level interface to the hint channel. It provides a way to write hints
@@ -27,13 +28,13 @@ where
 {
     /// Write a hint to the host. This will overwrite any existing hint in the channel, and block
     /// until all data has been written.
-    async fn write(&self, hint: &str) -> PreimageOracleResult<()> {
+    async fn write(&self, hint: &Bytes) -> PreimageOracleResult<()> {
         trace!(target: "hint_writer", "Writing hint \"{hint}\"");
 
         // Form the hint into a byte buffer. The format is a 4-byte big-endian length prefix
         // followed by the hint string.
         self.channel.write(u32::to_be_bytes(hint.len() as u32).as_ref()).await?;
-        self.channel.write(hint.as_bytes()).await?;
+        self.channel.write(hint.as_ref()).await?;
 
         trace!(target: "hint_writer", "Successfully wrote hint");
 
@@ -81,18 +82,7 @@ where
         // Read the raw hint payload.
         let mut raw_payload = vec![0u8; len as usize];
         self.channel.read_exact(raw_payload.as_mut_slice()).await?;
-        let payload = match String::from_utf8(raw_payload) {
-            Ok(p) => p,
-            Err(e) => {
-                // Write back on error to prevent blocking the client.
-                self.channel.write(&[0x00]).await?;
-
-                return Err(PreimageOracleError::Other(format!(
-                    "Failed to decode hint payload: {e}"
-                )));
-            }
-        };
-
+        let payload = Bytes::from(raw_payload);
         trace!(target: "hint_reader", "Successfully read hint: \"{payload}\"");
 
         // Route the hint
@@ -116,17 +106,18 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::native_channel::BidirectionalChannel;
+    use crate::{errors::PreimageOracleError, native_channel::BidirectionalChannel};
     use alloc::{sync::Arc, vec::Vec};
+    use alloy_primitives::bytes;
     use tokio::sync::Mutex;
 
     struct TestRouter {
-        incoming_hints: Arc<Mutex<Vec<String>>>,
+        incoming_hints: Arc<Mutex<Vec<Bytes>>>,
     }
 
     #[async_trait]
     impl HintRouter for TestRouter {
-        async fn route_hint(&self, hint: String) -> PreimageOracleResult<()> {
+        async fn route_hint(&self, hint: Bytes) -> PreimageOracleResult<()> {
             self.incoming_hints.lock().await.push(hint);
             Ok(())
         }
@@ -136,50 +127,21 @@ mod test {
 
     #[async_trait]
     impl HintRouter for TestFailRouter {
-        async fn route_hint(&self, _hint: String) -> PreimageOracleResult<()> {
+        async fn route_hint(&self, _hint: Bytes) -> PreimageOracleResult<()> {
             Err(PreimageOracleError::KeyNotFound)
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_unblock_on_bad_utf8() {
-        let mock_data = [0xf0, 0x90, 0x28, 0xbc];
-
-        let hint_channel = BidirectionalChannel::new().unwrap();
-
-        let client = tokio::task::spawn(async move {
-            let hint_writer = HintWriter::new(hint_channel.client);
-
-            #[allow(invalid_from_utf8_unchecked)]
-            hint_writer.write(unsafe { alloc::str::from_utf8_unchecked(&mock_data) }).await
-        });
-        let host = tokio::task::spawn(async move {
-            let router = TestRouter { incoming_hints: Default::default() };
-
-            let hint_reader = HintReader::new(hint_channel.host);
-            hint_reader.next_hint(&router).await
-        });
-
-        let (c, h) = tokio::join!(client, host);
-        c.unwrap().unwrap();
-        assert!(h.unwrap().is_err_and(|e| {
-            let PreimageOracleError::Other(e) = e else {
-                return false;
-            };
-            e.contains("Failed to decode hint payload")
-        }));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_unblock_on_fetch_failure() {
-        const MOCK_DATA: &str = "test-hint 0xfacade";
+        const MOCK_DATA: Bytes = bytes!("0x80facade");
 
         let hint_channel = BidirectionalChannel::new().unwrap();
 
         let client = tokio::task::spawn(async move {
             let hint_writer = HintWriter::new(hint_channel.client);
 
-            hint_writer.write(MOCK_DATA).await
+            hint_writer.write(&MOCK_DATA).await
         });
         let host = tokio::task::spawn(async move {
             let hint_reader = HintReader::new(hint_channel.host);
@@ -193,7 +155,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_hint_client_and_host() {
-        const MOCK_DATA: &str = "test-hint 0xfacade";
+        const MOCK_DATA: Bytes = bytes!("0x80facade");
 
         let incoming_hints = Arc::new(Mutex::new(Vec::new()));
         let hint_channel = BidirectionalChannel::new().unwrap();
@@ -201,7 +163,7 @@ mod test {
         let client = tokio::task::spawn(async move {
             let hint_writer = HintWriter::new(hint_channel.client);
 
-            hint_writer.write(MOCK_DATA).await
+            hint_writer.write(&MOCK_DATA).await
         });
         let host = tokio::task::spawn({
             let incoming_hints_ref = Arc::clone(&incoming_hints);
