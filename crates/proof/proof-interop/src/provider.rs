@@ -4,7 +4,7 @@ use crate::{BootInfo, HintType};
 use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
 use alloy_consensus::{Header, Sealed};
 use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, BlockNumber};
 use alloy_rlp::Decodable;
 use async_trait::async_trait;
 use kona_interop::InteropProvider;
@@ -253,6 +253,7 @@ impl<C: CommsClient> TrieHinter for OracleInteropProvider<C> {
         &self,
         parent_hash: B256,
         op_payload_attributes: &op_alloy_rpc_types_engine::OpPayloadAttributes,
+        _block_number: BlockNumber,
     ) -> Result<(), Self::Error> {
         kona_proof::block_on(async move {
             let encoded_attributes =

@@ -4,7 +4,7 @@ use crate::{HintType, eip2935::eip_2935_history_lookup, errors::OracleProviderEr
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use alloy_consensus::{BlockBody, Header};
 use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{Address, B256, Bytes};
+use alloy_primitives::{Address, B256, BlockNumber, Bytes};
 use alloy_rlp::Decodable;
 use async_trait::async_trait;
 use kona_derive::L2ChainProvider;
@@ -266,14 +266,18 @@ impl<T: CommsClient> TrieHinter for OracleL2ChainProvider<T> {
         &self,
         parent_hash: B256,
         op_payload_attributes: &op_alloy_rpc_types_engine::OpPayloadAttributes,
+        block_number: BlockNumber,
     ) -> Result<(), Self::Error> {
         crate::block_on(async move {
             let encoded_attributes =
                 serde_json::to_vec(op_payload_attributes).map_err(OracleProviderError::Serde)?;
 
             HintType::L2PayloadWitness
-                .with_data(&[parent_hash.as_slice(), &encoded_attributes])
-                .with_data(self.chain_id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec()))
+                .with_data(&[
+                    parent_hash.as_slice(),
+                    block_number.to_be_bytes().as_ref(),
+                    &encoded_attributes,
+                ])
                 .send(self.oracle.as_ref())
                 .await
         })

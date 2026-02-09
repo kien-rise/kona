@@ -2,7 +2,7 @@
 //! headers.
 
 use crate::TrieNode;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, BlockNumber, U256};
 use core::fmt::Display;
 use op_alloy_rpc_types_engine::OpPayloadAttributes;
 
@@ -80,5 +80,6 @@ pub trait TrieHinter {
         &self,
         parent_hash: B256,
         op_payload_attributes: &OpPayloadAttributes,
+        block_number: BlockNumber,
     ) -> Result<(), Self::Error>;
 }

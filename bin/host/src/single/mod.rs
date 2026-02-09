@@ -1,7 +1,9 @@
 //! This module contains the single-chain mode for the host.
 
 mod cfg;
-pub use cfg::{SingleChainHost, SingleChainHostError, SingleChainProviders};
+pub use cfg::{
+    ExecutionWitnessEndpoint, SingleChainHost, SingleChainHostError, SingleChainProviders,
+};
 
 mod local_kv;
 pub use local_kv::SingleChainLocalInputs;

@@ -10,7 +10,7 @@ use alloy_primitives::B256;
 use alloy_provider::RootProvider;
 use alloy_rpc_client::RpcClient;
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
 use kona_preimage::{
@@ -39,6 +39,16 @@ fn parse_rpc_client(s: &str) -> anyhow::Result<RpcClient> {
             .block_on(async { RpcClient::builder().connect(s).await })
             .with_context(|| format!("failed to connect to RPC: {:?}", s))?)
     }
+}
+
+/// Execution witness endpoint to use for fetching execution witness data.
+#[derive(Debug, Clone, Copy, Serialize, ValueEnum)]
+pub enum ExecutionWitnessEndpoint {
+    #[clap(name = "debug_executePayload")]
+    DebugExecutePayload,
+
+    #[clap(name = "debug_executionWitness")]
+    DebugExecutionWitness,
 }
 
 /// The host binary CLI application arguments.
@@ -126,10 +136,10 @@ pub struct SingleChainHost {
     /// look up the config in the known l1 configs.
     #[arg(long, alias = "l1-cfg", env)]
     pub l1_config_path: Option<PathBuf>,
-    /// Optionally enables the use of `debug_executePayload` to collect the execution witness from
-    /// the execution layer.
+    /// Optionally enables the use of `debug_executePayload` or `debug_executionWitness`
+    /// to collect the execution witness from the execution layer.
     #[arg(long, env)]
-    pub enable_experimental_witness_endpoint: bool,
+    pub enable_experimental_witness_endpoint: Option<ExecutionWitnessEndpoint>,
 }
 
 /// An error that can occur when handling single chain hosts
