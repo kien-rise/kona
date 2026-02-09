@@ -1,11 +1,14 @@
 //! [HintHandler] for the [SingleChainHost].
 
 use crate::{
-    HintHandler, OnlineHostBackendCfg, backend::util::store_ordered_trie, kv::SharedKeyValueStore,
-    single::cfg::SingleChainHost,
+    HintHandler, OnlineHostBackendCfg,
+    backend::util::store_ordered_trie,
+    kv::SharedKeyValueStore,
+    single::cfg::{ExecutionWitnessEndpoint, SingleChainHost},
 };
 use alloy_consensus::Header;
 use alloy_eips::{
+    BlockId,
     eip2718::Encodable2718,
     eip4844::{BlobTransactionSidecarItem, FIELD_ELEMENTS_PER_BLOB, IndexedBlobHash},
 };
@@ -341,31 +344,47 @@ impl HintHandler for SingleChainHintHandler {
                 })?;
             }
             HintType::L2PayloadWitness => {
-                if !cfg.enable_experimental_witness_endpoint {
+                let Some(witness_endpoint) = cfg.enable_experimental_witness_endpoint else {
                     warn!(
                         target: "single_hint_handler",
                         "L2PayloadWitness hint was sent, but payload witness is disabled. Skipping hint."
                     );
                     return Ok(());
-                }
+                };
 
-                ensure!(hint.data.len() >= 32, "Invalid hint data length");
+                ensure!(hint.data.len() >= 32 + 8, "Invalid hint data length");
 
                 let parent_block_hash = B256::from_slice(&hint.data.as_ref()[..32]);
+                let block_number = u64::from_be_bytes(hint.data[32..40].try_into()?);
                 let payload_attributes: OpPayloadAttributes =
-                    serde_json::from_slice(&hint.data[32..])?;
+                    serde_json::from_slice(&hint.data[40..])?;
 
-                let Ok(execute_payload_response) = providers
-                    .l2
-                    .client()
-                    .request::<(B256, OpPayloadAttributes), ExecutionWitness>(
-                        "debug_executePayload",
-                        (parent_block_hash, payload_attributes),
-                    )
-                    .await
-                else {
+                let response = match witness_endpoint {
+                    ExecutionWitnessEndpoint::DebugExecutePayload => {
+                        providers
+                            .l2
+                            .client()
+                            .request::<(B256, OpPayloadAttributes), ExecutionWitness>(
+                                "debug_executePayload",
+                                (parent_block_hash, payload_attributes),
+                            )
+                            .await
+                    }
+                    ExecutionWitnessEndpoint::DebugExecutionWitness => {
+                        providers
+                            .l2
+                            .client()
+                            .request::<(BlockId,), ExecutionWitness>(
+                                "debug_executionWitness",
+                                (BlockId::number(block_number),),
+                            )
+                            .await
+                    }
+                };
+
+                let Ok(execute_payload_response) = response else {
                     // Allow this hint to fail silently, as not all execution clients support
-                    // the `debug_executePayload` method.
+                    // the `debug_executePayload` and `debug_executionWitness` method.
                     return Ok(());
                 };
 

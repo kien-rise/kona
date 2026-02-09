@@ -228,6 +228,7 @@ where
         )?;
         let block_env = evm_env.block_env().clone();
         let parent_hash = self.trie_db.parent_block_header().seal();
+        let block_number = self.trie_db.parent_block_header().number + 1;
 
         // Attempt to send a payload witness hint to the host. This hint instructs the host to
         // populate its preimage store with the preimages required to statelessly execute
@@ -235,7 +236,7 @@ where
         // without it and fall back on on-demand preimage fetching for execution.
         self.trie_db
             .hinter
-            .hint_execution_witness(parent_hash, &attrs)
+            .hint_execution_witness(parent_hash, &attrs, block_number)
             .map_err(|e| TrieDBError::Provider(e.to_string()))?;
 
         info!(
