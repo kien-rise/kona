@@ -44,7 +44,7 @@ impl<KV> HintRouter for OfflineHostBackend<KV>
 where
     KV: KeyValueStore + Send + Sync + ?Sized,
 {
-    async fn route_hint(&self, _hint: String) -> PreimageOracleResult<()> {
+    async fn route_hint(&self, _hint: &[u8]) -> PreimageOracleResult<()> {
         Ok(())
     }
 }

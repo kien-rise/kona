@@ -4,7 +4,7 @@
 //! oracle provider errors and hint parsing errors. These errors provide detailed
 //! context about failures during proof generation and data retrieval.
 
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 use kona_derive::{PipelineError, PipelineErrorKind};
 use kona_mpt::{OrderedListWalkerError, TrieNodeError};
 use kona_preimage::errors::PreimageOracleError;
@@ -113,25 +113,16 @@ impl From<OracleProviderError> for PipelineErrorKind {
     }
 }
 
-/// Error parsing a hint from string format.
+/// Error parsing a hint from binary format.
 ///
-/// [`HintParsingError`] occurs when attempting to parse a hint string fails due to
-/// invalid format, unknown hint types, or malformed hint data. Hints are expected
-/// to follow the format `<hint_type> <hint_data>` where data is hex-encoded.
-///
-/// # Common Causes
-/// - Invalid hint format (wrong number of parts, missing data)
-/// - Unknown hint type strings that don't map to [`crate::HintType`] variants
-/// - Malformed hex encoding in hint data
-/// - Empty or malformed hint strings
-///
-/// # Example Error Scenarios
-/// ```text
-/// "invalid-hint-type 0x1234"      // Unknown hint type
-/// "l1-block-header"               // Missing hint data
-/// "l1-block-header invalid-hex"   // Invalid hex encoding
-/// "too many parts here"           // Wrong format
-/// ```
+/// [`HintParsingError`] occurs when attempting to parse a hint fails due to
+/// invalid format, unknown hint types, or malformed hint data.
 #[derive(Error, Debug)]
-#[error("Hint parsing error: {_0}")]
-pub struct HintParsingError(pub String);
+pub enum HintParsingError {
+    /// Unknown hint type byte value
+    #[error("Unknown hint type: 0x{0:02x}")]
+    UnknownHintType(u8),
+    /// Empty hint data
+    #[error("Empty hint data")]
+    EmptyHintData,
+}

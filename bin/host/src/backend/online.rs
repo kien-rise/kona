@@ -1,14 +1,15 @@
 //! Contains the [OnlineHostBackend] definition.
 
 use crate::SharedKeyValueStore;
+use alloy_primitives::hex;
 use anyhow::Result;
 use async_trait::async_trait;
 use kona_preimage::{
     HintRouter, PreimageFetcher, PreimageKey,
     errors::{PreimageOracleError, PreimageOracleResult},
 };
-use kona_proof::{Hint, errors::HintParsingError};
-use std::{collections::HashSet, hash::Hash, str::FromStr, sync::Arc};
+use kona_proof::Hint;
+use std::{collections::HashSet, hash::Hash, sync::Arc};
 use tokio::sync::RwLock;
 use tracing::{debug, error, trace};
 
@@ -16,7 +17,7 @@ use tracing::{debug, error, trace};
 /// [OnlineHostBackend].
 pub trait OnlineHostBackendCfg {
     /// The hint type describing the range of hints that can be received.
-    type HintType: FromStr<Err = HintParsingError> + Hash + Eq + PartialEq + Clone + Send + Sync;
+    type HintType: TryFrom<u8> + Hash + Eq + Clone + Send + Sync;
 
     /// The providers that are used to fetch data in response to hints.
     type Providers: Send + Sync;
@@ -94,14 +95,13 @@ where
     H: HintHandler<Cfg = C> + Send + Sync,
 {
     /// Set the last hint to be received.
-    async fn route_hint(&self, hint: String) -> PreimageOracleResult<()> {
-        trace!(target: "host_backend", "Received hint: {hint}");
+    async fn route_hint(&self, hint: &[u8]) -> PreimageOracleResult<()> {
+        trace!(target: "host_backend", "Received hint: {}", hex::encode_prefixed(&hint));
 
-        let parsed_hint = hint
-            .parse::<Hint<C::HintType>>()
+        let parsed_hint = Hint::<C::HintType>::try_from(hint)
             .map_err(|e| PreimageOracleError::HintParseFailed(e.to_string()))?;
         if self.proactive_hints.contains(&parsed_hint.ty) {
-            debug!(target: "host_backend", "Proactive hint received; Immediately fetching {hint}");
+            debug!(target: "host_backend", "Proactive hint received; Immediately fetching {}", hex::encode_prefixed(&hint));
             H::fetch_hint(parsed_hint, &self.cfg, &self.providers, self.kv.clone())
                 .await
                 .map_err(|e| PreimageOracleError::Other(e.to_string()))?;

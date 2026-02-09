@@ -43,6 +43,7 @@ lru.workspace = true
 spin.workspace = true
 serde.workspace = true
 tracing.workspace = true
+num_enum.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true

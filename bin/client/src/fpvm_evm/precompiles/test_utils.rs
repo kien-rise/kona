@@ -93,7 +93,7 @@ struct PrecompilePreimageFetcher {
     /// Inner map of preimages.
     map: Arc<Mutex<HashMap<PreimageKey, Vec<u8>>>>,
     /// The previous hint received.
-    last_hint: Arc<RwLock<Option<String>>>,
+    last_hint: Arc<RwLock<Option<Vec<u8>>>>,
 }
 
 #[async_trait]
@@ -107,12 +107,12 @@ impl PreimageFetcher for PrecompilePreimageFetcher {
         let last_hint = self.last_hint.read().await;
         let Some(last_hint) = last_hint.as_ref() else { unreachable!("Hint not queued") };
 
-        let parsed_hint = last_hint.parse::<Hint<HintType>>().unwrap();
+        let parsed_hint = Hint::<HintType>::try_from(last_hint.as_slice()).unwrap();
         if matches!(parsed_hint.ty, HintType::L1Precompile) {
-            let address = Address::from_slice(&parsed_hint.data.as_ref()[..20]);
-            let gas = u64::from_be_bytes(parsed_hint.data.as_ref()[20..28].try_into().unwrap());
+            let address = Address::from_slice(&parsed_hint.data[..20]);
+            let gas = u64::from_be_bytes(parsed_hint.data[20..28].try_into().unwrap());
             let input = parsed_hint.data[28..].to_vec();
-            let input_hash = keccak256(parsed_hint.data.as_ref());
+            let input_hash = keccak256(&parsed_hint.data);
 
             let result = execute_native_precompile(address, input, gas).map_or_else(
                 |_| vec![0u8; 1],
@@ -136,13 +136,13 @@ impl PreimageFetcher for PrecompilePreimageFetcher {
 #[derive(Default, Debug, Clone)]
 struct PrecompileHintRouter {
     /// The latest hint received.
-    last_hint: Arc<RwLock<Option<String>>>,
+    last_hint: Arc<RwLock<Option<Vec<u8>>>>,
 }
 
 #[async_trait]
 impl HintRouter for PrecompileHintRouter {
-    async fn route_hint(&self, hint: String) -> PreimageOracleResult<()> {
-        self.last_hint.write().await.replace(hint);
+    async fn route_hint(&self, hint: &[u8]) -> PreimageOracleResult<()> {
+        self.last_hint.write().await.replace(hint.to_vec());
         Ok(())
     }
 }

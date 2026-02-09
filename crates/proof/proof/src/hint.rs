@@ -1,13 +1,9 @@
 //! This module contains the [HintType] enum.
 
 use crate::errors::{HintParsingError, OracleProviderError};
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
-use alloy_primitives::{Bytes, hex};
-use core::{fmt::Display, str::FromStr};
+use alloc::vec::Vec;
 use kona_preimage::HintWriterClient;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 /// A [Hint] is parsed in the format `<hint_type> <hint_data>`, where `<hint_type>` is a string that
 /// represents the type of hint, and `<hint_data>` is the data associated with the hint (bytes
@@ -17,100 +13,83 @@ pub struct Hint<HT> {
     /// The type of hint.
     pub ty: HT,
     /// The data associated with the hint.
-    pub data: Bytes,
+    pub data: Vec<u8>,
 }
 
 impl<HT> Hint<HT>
 where
-    HT: Display,
+    HT: Into<u8>,
 {
     /// Creates a new [Hint] with the specified type and data.
-    pub fn new<T: Into<Bytes>>(ty: HT, data: T) -> Self {
-        Self { ty, data: data.into() }
-    }
-
-    /// Splits the [Hint] into its components.
-    pub fn split(self) -> (HT, Bytes) {
-        (self.ty, self.data)
+    pub fn new(ty: HT, data: Vec<u8>) -> Self {
+        Self { ty, data }
     }
 
     /// Appends more data to [Hint::data].
-    pub fn with_data<T: AsRef<[u8]>>(self, data: T) -> Self {
-        // No-op if the data is empty.
-        if data.as_ref().is_empty() {
-            return self;
-        }
-
-        let mut hint_data = Vec::with_capacity(self.data.len() + data.as_ref().len());
-        hint_data.extend_from_slice(self.data.as_ref());
-        hint_data.extend_from_slice(data.as_ref());
-
-        Self { data: hint_data.into(), ..self }
+    pub fn with_data<T: AsRef<[u8]>>(mut self, data: T) -> Self {
+        self.data.extend_from_slice(data.as_ref());
+        self
     }
 
     /// Sends the hint to the passed [HintWriterClient].
-    pub async fn send<T: HintWriterClient>(&self, comms: &T) -> Result<(), OracleProviderError> {
-        comms.write(&self.encode()).await.map_err(OracleProviderError::Preimage)
-    }
-
-    /// Encodes the hint as a string.
-    pub fn encode(&self) -> String {
-        alloc::format!("{} {}", self.ty, self.data)
+    pub async fn send<T: HintWriterClient>(mut self, comms: &T) -> Result<(), OracleProviderError> {
+        let mut buffer = core::mem::take(&mut self.data);
+        buffer.insert(0, self.ty.into());
+        comms.write(&buffer).await.map_err(OracleProviderError::Preimage)
     }
 }
 
-impl<HT> FromStr for Hint<HT>
+impl<HT> TryFrom<&[u8]> for Hint<HT>
 where
-    HT: FromStr<Err = HintParsingError>,
+    HT: TryFrom<u8>,
 {
-    type Err = HintParsingError;
+    type Error = HintParsingError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.split(' ').collect::<Vec<_>>();
-
-        if parts.len() != 2 {
-            return Err(HintParsingError(alloc::format!("Invalid hint format: {s}")));
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            return Err(HintParsingError::EmptyHintData);
         }
 
-        let hint_type = parts.remove(0).parse::<HT>()?;
-        let hint_data =
-            hex::decode(parts.remove(0)).map_err(|e| HintParsingError(e.to_string()))?.into();
+        let ty = HT::try_from(value[0]).map_err(|_| HintParsingError::UnknownHintType(value[0]))?;
+        let data = value[1..].to_vec();
 
-        Ok(Self { ty: hint_type, data: hint_data })
+        Ok(Self { ty, data })
     }
 }
 
 /// The [HintType] enum is used to specify the type of hint that was received.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] //
+#[derive(IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
 pub enum HintType {
     /// A hint that specifies the block header of a layer 1 block.
-    L1BlockHeader,
+    L1BlockHeader = 0x01,
     /// A hint that specifies the transactions of a layer 1 block.
-    L1Transactions,
+    L1Transactions = 0x02,
     /// A hint that specifies the state node of a layer 1 block.
-    L1Receipts,
+    L1Receipts = 0x03,
     /// A hint that specifies a blob in the layer 1 beacon chain.
-    L1Blob,
+    L1Blob = 0x04,
     /// A hint that specifies a precompile call on layer 1.
-    L1Precompile,
+    L1Precompile = 0x05,
     /// A hint that specifies the block header of a layer 2 block.
-    L2BlockHeader,
+    L2BlockHeader = 0x06,
     /// A hint that specifies the transactions of a layer 2 block.
-    L2Transactions,
+    L2Transactions = 0x07,
     /// A hint that specifies the code of a contract on layer 2.
-    L2Code,
+    L2Code = 0x20,
     /// A hint that specifies the preimage of the starting L2 output root on layer 2.
-    StartingL2Output,
+    StartingL2Output = 0x30,
     /// A hint that specifies the state node in the L2 state trie.
-    L2StateNode,
+    L2StateNode = 0x50,
     /// A hint that specifies the proof on the path to an account in the L2 state trie.
-    L2AccountProof,
+    L2AccountProof = 0x51,
     /// A hint that specifies the proof on the path to a storage slot in an account within in the
     /// L2 state trie.
-    L2AccountStorageProof,
+    L2AccountStorageProof = 0x52,
     /// A hint that specifies bulk storage of all the code, state and keys generated by an
     /// execution witness.
-    L2PayloadWitness,
+    L2PayloadWitness = 0x70,
 }
 
 impl HintType {
@@ -123,55 +102,5 @@ impl HintType {
             acc
         });
         Hint::new(self, hint_data)
-    }
-}
-
-impl FromStr for HintType {
-    type Err = HintParsingError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "l1-block-header" => Ok(Self::L1BlockHeader),
-            "l1-transactions" => Ok(Self::L1Transactions),
-            "l1-receipts" => Ok(Self::L1Receipts),
-            "l1-blob" => Ok(Self::L1Blob),
-            "l1-precompile" => Ok(Self::L1Precompile),
-            "l2-block-header" => Ok(Self::L2BlockHeader),
-            "l2-transactions" => Ok(Self::L2Transactions),
-            "l2-code" => Ok(Self::L2Code),
-            "starting-l2-output" => Ok(Self::StartingL2Output),
-            "l2-state-node" => Ok(Self::L2StateNode),
-            "l2-account-proof" => Ok(Self::L2AccountProof),
-            "l2-account-storage-proof" => Ok(Self::L2AccountStorageProof),
-            "l2-payload-witness" => Ok(Self::L2PayloadWitness),
-            _ => Err(HintParsingError(value.to_string())),
-        }
-    }
-}
-
-impl From<HintType> for &str {
-    fn from(value: HintType) -> Self {
-        match value {
-            HintType::L1BlockHeader => "l1-block-header",
-            HintType::L1Transactions => "l1-transactions",
-            HintType::L1Receipts => "l1-receipts",
-            HintType::L1Blob => "l1-blob",
-            HintType::L1Precompile => "l1-precompile",
-            HintType::L2BlockHeader => "l2-block-header",
-            HintType::L2Transactions => "l2-transactions",
-            HintType::L2Code => "l2-code",
-            HintType::StartingL2Output => "starting-l2-output",
-            HintType::L2StateNode => "l2-state-node",
-            HintType::L2AccountProof => "l2-account-proof",
-            HintType::L2AccountStorageProof => "l2-account-storage-proof",
-            HintType::L2PayloadWitness => "l2-payload-witness",
-        }
-    }
-}
-
-impl Display for HintType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let s: &str = (*self).into();
-        write!(f, "{s}")
     }
 }

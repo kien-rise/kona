@@ -2,7 +2,7 @@ use crate::{
     PreimageKey,
     errors::{ChannelResult, PreimageOracleResult},
 };
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use async_trait::async_trait;
 
 /// A [PreimageOracleClient] is a high-level interface to read data from the host, keyed by a
@@ -36,7 +36,7 @@ pub trait HintWriterClient {
     /// # Returns
     /// - `Ok(())` if the hint was successfully written to the host.
     /// - `Err(_)` if the hint could not be written to the host.
-    async fn write(&self, hint: &str) -> PreimageOracleResult<()>;
+    async fn write(&self, hint: &[u8]) -> PreimageOracleResult<()>;
 }
 
 /// A [CommsClient] is a trait that combines the [PreimageOracleClient] and [HintWriterClient]
@@ -85,7 +85,7 @@ pub trait HintRouter {
     /// # Returns
     /// - `Ok(())` if the hint was successfully routed.
     /// - `Err(_)` if the hint could not be routed.
-    async fn route_hint(&self, hint: String) -> PreimageOracleResult<()>;
+    async fn route_hint(&self, hint: &[u8]) -> PreimageOracleResult<()>;
 }
 
 /// A [PreimageFetcher] is a high-level interface to fetch preimages during preimage requests.
