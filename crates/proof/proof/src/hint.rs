@@ -50,7 +50,8 @@ where
 
     /// Sends the hint to the passed [HintWriterClient].
     pub async fn send<T: HintWriterClient>(&self, comms: &T) -> Result<(), OracleProviderError> {
-        comms.write(&self.encode()).await.map_err(OracleProviderError::Preimage)
+        // comms.write(&self.encode()).await.map_err(OracleProviderError::Preimage)
+        todo!()
     }
 
     /// Encodes the hint as a string.

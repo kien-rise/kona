@@ -107,7 +107,7 @@ impl PreimageFetcher for PrecompilePreimageFetcher {
         let last_hint = self.last_hint.read().await;
         let Some(last_hint) = last_hint.as_ref() else { unreachable!("Hint not queued") };
 
-        let parsed_hint = last_hint.parse::<Hint<HintType>>().unwrap();
+        let parsed_hint = last_hint.parse::<Hint<HintType>>().unwrap(); // here
         if matches!(parsed_hint.ty, HintType::L1Precompile) {
             let address = Address::from_slice(&parsed_hint.data.as_ref()[..20]);
             let gas = u64::from_be_bytes(parsed_hint.data.as_ref()[20..28].try_into().unwrap());

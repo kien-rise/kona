@@ -106,7 +106,7 @@ where
     OR: PreimageOracleClient + Sync,
     HW: HintWriterClient + Sync,
 {
-    async fn write(&self, hint: &str) -> PreimageOracleResult<()> {
+    async fn write(&self, hint: &[u8]) -> PreimageOracleResult<()> {
         self.hint_writer.write(hint).await
     }
 }
